@@ -565,6 +565,10 @@ def get_datahandlerclass(datatype: str) -> type[IDataHandler]:
         from .parquetdatahandler import ParquetDataHandler
 
         return ParquetDataHandler
+    elif datatype == "vertica":
+        from .verticadatahandler import VerticaDataHandler
+
+        return VerticaDataHandler
     else:
         raise ValueError(f"No datahandler for datatype {datatype} available.")
 
