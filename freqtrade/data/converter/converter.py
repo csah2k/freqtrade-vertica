@@ -37,7 +37,8 @@ def ohlcv_to_dataframe(
     logger.debug(f"Converting candle (OHLCV) data to dataframe for pair {pair}.")
     cols = DEFAULT_DATAFRAME_COLUMNS
     df = DataFrame(ohlcv, columns=cols)
-
+    
+    df.columns = df.columns.str.strip().str.replace('"', '', regex=False)
     df["date"] = to_datetime(df["date"], unit="ms", utc=True)
 
     # Some exchanges return int values for Volume and even for OHLC.

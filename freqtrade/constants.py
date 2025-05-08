@@ -59,7 +59,7 @@ AVAILABLE_PAIRLISTS = [
     "SpreadFilter",
     "VolatilityFilter",
 ]
-AVAILABLE_DATAHANDLERS = ["json", "jsongz", "feather", "parquet"]
+AVAILABLE_DATAHANDLERS = ["json", "jsongz", "feather", "parquet", "vertica"]
 BACKTEST_BREAKDOWNS = ["day", "week", "month", "year"]
 BACKTEST_CACHE_AGE = ["none", "day", "week", "month"]
 BACKTEST_CACHE_DEFAULT = "day"

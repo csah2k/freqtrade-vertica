@@ -81,7 +81,7 @@ class IHyperOpt(ABC):
         # to adjust resulting ranges of the ROI tables.
         # Increase if you need wider ranges in the roi hyperspace, decrease if shorter
         # ranges are needed.
-        roi_t_alpha = 1.0
+        roi_t_alpha = 5.0
         roi_p_alpha = 1.0
 
         timeframe_min = timeframe_to_minutes(self.timeframe)

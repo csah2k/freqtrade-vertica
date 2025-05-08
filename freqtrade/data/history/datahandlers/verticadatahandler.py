@@ -3,7 +3,7 @@ import os
 import re
 import logging
 import vertica_python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from verticapy import vDataFrame
 from verticapy import set_option
@@ -39,9 +39,19 @@ class VerticaDataHandler(IDataHandler):
             raise ValueError(f"Unsupported timeframe unit: {unit}")
 
     def __init__(self, datadir):
+        self.required_columns = [
+            'open_time', 'open', 'high', 'low', 'close', 'volume', 
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'some_var',
+            'symbol', 'base_asset', 'quote_asset'
+        ]
         self.db_schema = os.getenv('VERT_SCHEMA', 'stocks')
-        self.hist_table = os.getenv('VERT_TABLE', 'historical_data')
+        self.hist_table = os.getenv('VERT_TABLE_HIST', 'historical_data')
         self.hist_relation = f'"{self.db_schema}"."{self.hist_table}"'
+        self.pred_table = os.getenv('VERT_TABLE_PRED', 'trades_predict')
+        self.pred_relation = f'"{self.db_schema}"."{self.pred_table}"'
+        self.models = [ "RFC_6H",  "RFC_12H", "RFC_24H",  "RFC_48H" ]
+
         self.conn_info = {
             'host': os.getenv('VERT_HOST', 'localhost'),
             'port': os.getenv('VERT_PORT', 5433),
@@ -70,17 +80,11 @@ class VerticaDataHandler(IDataHandler):
         :param candle_type: !! Not implemented !!
         :return: None
         """
+        logging.info(f"vertica_ohlcv_store: {pair}, timeframe: {timeframe}, data: {data.head()}")
+        raise NotImplementedError()
+
         base, quote = pair.split('/')
         symbol = pair.replace("/", "")
-
-        # Expected base input: date, open, high, low, close, volume
-        # Add missing columns with default NaN or appropriate value
-        required_columns = [
-            'open_time', 'open', 'high', 'low', 'close', 'volume', 
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'some_var',
-            'symbol', 'base_asset', 'quote_asset'
-        ]
 
         # If input has just 5 columns (date, open, high, low, close, volume), rename and extend
         if data.shape[1] != 6:
@@ -94,7 +98,7 @@ class VerticaDataHandler(IDataHandler):
         data['some_var'] = None
 
         # Ensure open_time is datetime
-        data['open_time'] = to_datetime(data['open_time'])
+        #data['open_time'] = to_datetime(data['open_time'])
 
         # Compute close_time
         delta = self.parse_timeframe_to_timedelta(timeframe)
@@ -106,15 +110,17 @@ class VerticaDataHandler(IDataHandler):
         data['quote_asset'] = quote
 
         # Ensure all columns are in the right order
-        data = data[required_columns]
+        data = data[self.required_columns]
 
         # Insert into Vertica DB
-        insert_into(
+        rows = insert_into(
+            column_names = self.required_columns,
             table_name = self.hist_table,
             schema = self.db_schema,
             data = data,
             genSQL = True # --------- DEBUG ----------
         )
+        logging.info(f"rows inserted: {rows}")
 
 
     def _ohlcv_load(
@@ -133,14 +139,15 @@ class VerticaDataHandler(IDataHandler):
         :return: DataFrame with ohlcv data, or empty DataFrame
         """
         try:
-            logging.info(f"Load data from Vertica: pair: {pair}, timeframe: {timeframe}, timerange: {timerange.timerange_str}")
-            
+            logging.info(f"vertica_ohlcv_load: {pair}, timeframe: {timeframe}, timerange: {timerange.timerange_str if timerange else None}")
             base, quote = pair.split('/')
-            hist_data:vDataFrame = vDataFrame(self.hist_table, schema=self.db_schema)\
+            startdt = timerange.startdt if timerange and timerange.startdt else datetime.now() - timedelta(days=30)
+            stopdt = timerange.stopdt if timerange and timerange.stopdt else datetime.now()
+            vdf:vDataFrame = vDataFrame(self.hist_table, schema=self.db_schema)\
                 .filter([f"base_asset = '{base}'",
                         f"quote_asset = '{quote}'",
-                        f"close_time >= '{timerange.startdt.isoformat()}'",
-                        f"close_time <= '{timerange.stopdt.isoformat()}'"])\
+                        f"close_time >= '{startdt.isoformat()}'",
+                        f"close_time <= '{stopdt.isoformat()}'"])\
                 .interpolate(
                     ts = "close_time",
                     rule = timeframe,
@@ -152,8 +159,10 @@ class VerticaDataHandler(IDataHandler):
                         "volume": "linear"
                     })\
                 .select(["close_time as ts", "open", "high", "low", "close", "volume"])
-
-            return hist_data.eval("date", "ts::TIMESTAMPTZ").select(self._columns).to_pandas()
+           
+            vdf.eval("date", "ts::TIMESTAMPTZ")
+            df = vdf.select(self._columns).to_pandas()
+            return df
 
         except Exception as e:
             logger.exception(
@@ -172,6 +181,7 @@ class VerticaDataHandler(IDataHandler):
         :param candle_type: Any of the enum CandleType (must match trading mode!)
         """
         #raise NotImplementedError()
+        logging.info(f"vertica_ohlcv_append: {data.head()}")
         self.ohlcv_store(pair, timeframe, data)
 
     def _trades_store(self, pair: str, data: DataFrame, trading_mode: TradingMode) -> None:
@@ -182,6 +192,7 @@ class VerticaDataHandler(IDataHandler):
                      column sequence as in DEFAULT_TRADES_COLUMNS
         :param trading_mode: Trading mode to use (used to determine the filename)
         """
+        logging.info(f"vertica_trades_store: {data.head()}")
         filename = self._pair_trades_filename(self._datadir, pair, trading_mode)
         self.create_dir_if_needed(filename)
         data.reset_index(drop=True).to_parquet(filename)
@@ -206,7 +217,7 @@ class VerticaDataHandler(IDataHandler):
         :param timerange: Timerange to load trades for - currently not implemented
         :return: List of trades
         """
-
+        logging.info(f"vertica_trades_load: {pair}")
         # ["timestamp", "id", "type", "side", "price", "amount", "cost"]
 
         filename = self._pair_trades_filename(self._datadir, pair, trading_mode)
@@ -219,4 +230,4 @@ class VerticaDataHandler(IDataHandler):
 
     @classmethod
     def _get_file_extension(cls):
-        return "parquet"
+        return "vertica"
