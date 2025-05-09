@@ -3,8 +3,7 @@ from typing import Any
 
 from rich.console import ConsoleRenderable, Group, RichCast
 from rich.progress import Progress, Task, TaskID
-
-
+import json
 class CustomProgress(Progress):
     def __init__(
         self,
@@ -34,6 +33,7 @@ class CustomProgress(Progress):
         refresh: bool = False,
         **fields: Any,
     ) -> None:
+        print(json.dumps(dict(progress=self.tasks[task_id].completed/self.tasks[task_id].total)), flush=True)
         t = super().update(
             task_id,
             total=total,

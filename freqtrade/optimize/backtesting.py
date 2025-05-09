@@ -5,12 +5,14 @@ This module contains the backtesting logic
 """
 
 import logging
+import operator
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta
 
 from numpy import nan
 from pandas import DataFrame
+from verticapy import vDataFrame
 
 from freqtrade import constants
 from freqtrade.configuration import TimeRange, validate_config_consistency
@@ -104,7 +106,7 @@ HEADERS = [
 ]
 
 
-class Backtesting:
+class BaseBacktesting:
     """
     Backtesting class, this class contains all the logic to run a backtest
 
@@ -1818,3 +1820,135 @@ class Backtesting:
         if len(self.strategylist) > 0:
             # Show backtest results
             show_backtest_results(self.config, self.results)
+
+
+class Backtesting(BaseBacktesting):
+    db_schema = "stocks"
+    hist_table = "historical_data"
+    trade_prdct_table = "trades_predict"
+
+    def fetch_market_data(self, pair:str, interval:str, timerange:TimeRange) -> DataFrame:
+            """
+            Fetch market data for a given trading pair and timeframe from Vertica.
+            Assumes a table `crypto_prices` with columns: timestamp, pair, timeframe, open, high, low, close, volume.
+            """        
+            logging.info(f"fetch_market_data: {pair}, interval: {interval}, timerange: {timerange.timerange_str}")
+            base_asset, quote_asset = pair.split('/')
+            hist_table = f"{self.db_schema}.{self.hist_table}"
+            trades_table = f"{self.db_schema}.{self.trade_prdct_table}"
+            
+            hist_data:vDataFrame = vDataFrame(hist_table)\
+                .filter([f"base_asset = '{base_asset}'",
+                        f"quote_asset = '{quote_asset}'",
+                        f"close_time >= '{timerange.startdt.isoformat()}'",
+                        f"close_time <= '{timerange.stopdt.isoformat()}'"])\
+                .interpolate(
+                    ts = "close_time",
+                    rule = interval,
+                    method = { 
+                        "low": "linear", 
+                        "high": "linear",
+                        "open": "linear",
+                        "close": "linear", 
+                        "volume": "linear"
+                    })\
+                .select(["close_time as ts", "open", "high", "low", "close", "volume"])
+            
+            predictions:vDataFrame = vDataFrame(trades_table).filter([
+                    f"base_asset = '{base_asset}'",
+                    f"quote_asset = '{quote_asset}'",
+                    f"ts >= '{timerange.startdt.isoformat()}'",
+                    f"ts <= '{timerange.stopdt.isoformat()}'"])
+            models = list(predictions["model"].distinct())
+
+            for m in models: 
+                predictions.eval(f"{m}_PRED", f"CASE WHEN model = '{m}' THEN predicted ELSE null END")
+                predictions.eval(f"{m}_PROB", f"CASE WHEN model = '{m}' THEN probability ELSE null END")
+
+            predictions = predictions.groupby(
+                    columns=["ts"],
+                    expr=[f"ARGMAX_AGG({m}_PROB, {m}_PRED) as {m}_PRED" for m in models] + [f"MAX({m}_PROB) as {m}_PROB" for m in models])\
+                .interpolate(
+                    ts = "ts",
+                    rule = interval,
+                    method = { f"{m}_PRED": "ffill" for m in models } | { f"{m}_PROB": "linear" for m in models })
+
+            vdf:vDataFrame = hist_data.join(predictions,
+                    how="left",
+                    on_interpolate={"ts": "ts"},
+                    expr1 = [ "*" ],
+                    expr2 = [f"{m}_PRED" for m in models] + [f"{m}_PROB" for m in models]
+                )
+
+            for m in models:
+                vdf.eval(f"{m}_BUY_PROB", f"CASE WHEN {m}_PRED = 'Buy' THEN {m}_PROB ELSE 0 END")
+                vdf.eval(f"{m}_SELL_PROB", f"CASE WHEN {m}_PRED = 'Sell' THEN {m}_PROB ELSE 0 END")
+            
+            models_buy = ', '.join([f'{m}_BUY_PROB' for m in models])
+            models_sell = ', '.join([f'{m}_SELL_PROB' for m in models])
+            vdf.eval("AVG_BUY_PROB", f"APPLY_AVG(ARRAY[{models_buy}])")
+            vdf.eval("AVG_SELL_PROB", f"APPLY_AVG(ARRAY[{models_sell}])")
+            vdf.eval("AVG_PRED", f"CASE WHEN AVG_BUY_PROB > AVG_SELL_PROB THEN 'Buy' ELSE 'Sell' END")
+            vdf.eval("AVG_PROB", f"CASE WHEN AVG_BUY_PROB > AVG_SELL_PROB THEN AVG_BUY_PROB ELSE AVG_SELL_PROB END")
+
+            vdf = vdf.eval("date", "ts::TIMESTAMPTZ")\
+                .select([
+                    "date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "AVG_PRED",
+                    "AVG_PROB",
+                    "AVG_BUY_PROB",
+                    "AVG_SELL_PROB"] + 
+                    [f"{m}_PRED" for m in models] + 
+                    [f"{m}_PROB" for m in models]
+                    )
+            
+            return vdf.to_pandas()
+
+    def get_timerange(self, data: dict[str, DataFrame]) -> tuple[datetime, datetime]:
+        """
+        Get the maximum common timerange for the given backtest data.
+
+        :param data: dictionary with preprocessed backtesting data
+        :return: tuple containing min_date, max_date
+        """
+        timeranges = [
+            (frame["date"].min(), frame["date"].max())
+            for frame in data.values()
+        ]
+        return (
+            min(timeranges, key=operator.itemgetter(0))[0],
+            max(timeranges, key=operator.itemgetter(1))[1],
+        )
+
+    def load_bt_data(self) -> tuple[dict[str, DataFrame], TimeRange]:
+        """
+        Loads backtest data and returns the data combined with the timerange
+        as tuple.
+        """
+        self.progress.init_step(BacktestState.DATALOAD, 1)
+
+        data:dict[str, DataFrame] = {}
+        for pair in self.pairlists.whitelist:            
+            data[pair] = self.fetch_market_data(pair, self.timeframe, self.timerange)
+            logging.info(f"{pair}: {len(data[pair])} rows")
+
+        min_date, max_date = self.get_timerange(data)
+
+        logging.info(
+            f"Loading data from {min_date.strftime(DATETIME_PRINT_FORMAT)} "+
+            f"up to {max_date.strftime(DATETIME_PRINT_FORMAT)} "+
+            f"({(max_date - min_date).days} days)."
+        )
+
+        # Adjust startts forward if not enough data is available
+        self.timerange.adjust_start_if_necessary(
+            timeframe_to_seconds(self.timeframe), self.required_startup, min_date
+        )
+
+        self.progress.set_new_value(1)
+        return data, self.timerange
