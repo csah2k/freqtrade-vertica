@@ -14,6 +14,7 @@ import optuna
 from joblib import delayed, dump, load, wrap_non_picklable_objects
 from joblib.externals import cloudpickle
 from optuna.exceptions import ExperimentalWarning
+from optuna.terminator import BestValueStagnationEvaluator, Terminator
 from pandas import DataFrame
 
 from freqtrade.constants import DATETIME_PRINT_FORMAT, Config
@@ -44,6 +45,7 @@ from freqtrade.util.dry_run_wallet import get_dry_run_wallet
 
 logger = logging.getLogger(__name__)
 
+INITIAL_POINTS = 30
 
 MAX_LOSS = 100000  # just a big enough number to be bad result in loss optimization
 
@@ -103,6 +105,10 @@ class HyperOptimizer:
         self.data_pickle_file = data_pickle_file
 
         self.market_change = 0.0
+
+        self.es_epochs = config.get("early_stop", 0)
+        if self.es_epochs > 0 and self.es_epochs < 0.2 * config.get("epochs", 0):
+            logger.warning(f"Early stop epochs {self.es_epochs} lower than 20% of total epochs")
 
         if HyperoptTools.has_space(self.config, "sell"):
             # Make sure use_exit_signal is enabled
@@ -420,9 +426,23 @@ class HyperOptimizer:
                 raise OperationalException(f"Optuna Sampler {o_sampler} not supported.")
             with warnings.catch_warnings():
                 warnings.filterwarnings(action="ignore", category=ExperimentalWarning)
-                sampler = optuna_samplers_dict[o_sampler](seed=random_state)
+                if o_sampler in ["NSGAIIISampler", "NSGAIISampler"]:
+                    sampler = optuna_samplers_dict[o_sampler](
+                        seed=random_state, population_size=INITIAL_POINTS
+                    )
+                elif o_sampler in ["GPSampler", "TPESampler", "CmaEsSampler"]:
+                    sampler = optuna_samplers_dict[o_sampler](
+                        seed=random_state, n_startup_trials=INITIAL_POINTS
+                    )
+                else:
+                    sampler = optuna_samplers_dict[o_sampler](seed=random_state)
         else:
             sampler = o_sampler
+
+        if self.es_epochs > 0:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(action="ignore", category=ExperimentalWarning)
+                self.es_terminator = Terminator(BestValueStagnationEvaluator(self.es_epochs))
 
         logger.info(f"Using optuna sampler {o_sampler}.")
         return optuna.create_study(sampler=sampler, direction="minimize")
