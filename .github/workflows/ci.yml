@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         os: [ "ubuntu-22.04", "ubuntu-24.04" ]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -90,6 +90,7 @@ jobs:
         COVERALLS_REPO_TOKEN: 6D1m0xupS3FgutfuGao8keFf9Hc0FpIXu
       run: |
         # Allow failure for coveralls
+        uv pip install coveralls
         coveralls || true
 
     - name: Run json schema extract
@@ -103,6 +104,8 @@ jobs:
         python build_helpers/create_command_partials.py
 
     - name: Check for repository changes
+      # TODO: python 3.13 slightly changed the output of argparse.
+      if: (matrix.python-version != '3.13')
       run: |
         if [ -n "$(git status --porcelain)" ]; then
           echo "Repository is dirty, changes detected:"
@@ -157,7 +160,10 @@ jobs:
     strategy:
       matrix:
         os: [ "macos-13", "macos-14", "macos-15" ]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        exclude:
+        - os: macos-13
+          python-version: "3.13"
 
     steps:
     - uses: actions/checkout@v4
@@ -285,7 +291,7 @@ jobs:
     strategy:
       matrix:
         os: [ windows-latest ]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
