@@ -50,7 +50,6 @@ class VerticaDataHandler(IDataHandler):
         self.hist_relation = f'"{self.db_schema}"."{self.hist_table}"'
         self.pred_table = os.getenv('VERT_TABLE_PRED', 'trades_predict')
         self.pred_relation = f'"{self.db_schema}"."{self.pred_table}"'
-        self.models = [ "RFC_6H",  "RFC_12H", "RFC_24H",  "RFC_48H" ]
 
         self.conn_info = {
             'host': os.getenv('VERT_HOST', 'localhost'),

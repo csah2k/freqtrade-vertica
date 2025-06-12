@@ -4,7 +4,7 @@ from datetime import datetime
 from pandas import DataFrame
 
 from freqtrade.exceptions import StrategyError
-
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class StrategyResultValidator:
             message = "No dataframe returned (return statement missing?)."
         elif self._length != len(dataframe):
             message = message_template.format("length")
-        elif self._close != dataframe["close"].iloc[-1]:
+        elif not np.isclose(self._close, float(dataframe["close"].iloc[-1]), rtol=1e-9):
             message = message_template.format("last close price")
         elif self._date != dataframe["date"].iloc[-1]:
             message = message_template.format("last date")
