@@ -1896,8 +1896,10 @@ class Backtesting(BaseBacktesting):
                         "close": "linear", 
                         "volume": "linear"
                     })\
-                .select(["close_time as ts", "open", "high", "low", "close", "volume"])
-            
+                .eval("price_avg", "AVG(close) OVER(ORDER BY close_time ROWS BETWEEN 100 PRECEDING AND CURRENT ROW)")\
+                .eval("delta_avg", "(close - price_avg) / NULLIF(price_avg, 0) * 100")\
+                .select(["close_time as ts", "open", "high", "low", "close", "volume", "delta_avg"])
+
             predictions:vDataFrame = vDataFrame(trades_table).filter([
                     f"base_asset = '{base_asset}'",
                     f"quote_asset = '{quote_asset}'",
@@ -1943,6 +1945,7 @@ class Backtesting(BaseBacktesting):
                     "low",
                     "close",
                     "volume",
+                    "delta_avg",
                     "AVG_PRED",
                     "AVG_PROB",
                     "AVG_BUY_PROB",

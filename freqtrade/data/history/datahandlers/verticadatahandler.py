@@ -191,7 +191,7 @@ class VerticaDataHandler(IDataHandler):
                      column sequence as in DEFAULT_TRADES_COLUMNS
         :param trading_mode: Trading mode to use (used to determine the filename)
         """
-        logging.info(f"vertica_trades_store: {data.head()}")
+        logging.info(f"vertica_trades_store: {pair} : {trading_mode} : {data.head()}")
         filename = self._pair_trades_filename(self._datadir, pair, trading_mode)
         self.create_dir_if_needed(filename)
         data.reset_index(drop=True).to_parquet(filename)
@@ -216,7 +216,7 @@ class VerticaDataHandler(IDataHandler):
         :param timerange: Timerange to load trades for - currently not implemented
         :return: List of trades
         """
-        logging.info(f"vertica_trades_load: {pair}")
+        logging.info(f"vertica_trades_load: {pair} : {trading_mode} : {timerange}")
         # ["timestamp", "id", "type", "side", "price", "amount", "cost"]
 
         filename = self._pair_trades_filename(self._datadir, pair, trading_mode)
