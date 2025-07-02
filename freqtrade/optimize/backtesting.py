@@ -1869,23 +1869,21 @@ class BaseBacktesting:
 class Backtesting(BaseBacktesting):
     db_schema = "stocks"
     hist_table = "historical_data"
-    trade_prdct_table = "trades_predict"
 
     def fetch_market_data(self, pair:str, interval:str, timerange:TimeRange) -> DataFrame:
             """
             Fetch market data for a given trading pair and timeframe from Vertica.
             Assumes a table `crypto_prices` with columns: timestamp, pair, timeframe, open, high, low, close, volume.
-            """        
-            logging.info(f"fetch_market_data: {pair}, interval: {interval}, timerange: {timerange.timerange_str}")
-            base_asset, quote_asset = pair.split('/')
+            """
+            logging.info(f"fetch_market_data: {pair}, interval: {interval}")
+            base, quote = pair.split('/')
             hist_table = f"{self.db_schema}.{self.hist_table}"
-            trades_table = f"{self.db_schema}.{self.trade_prdct_table}"
             
-            hist_data:vDataFrame = vDataFrame(hist_table)\
-                .filter([f"base_asset = '{base_asset}'",
-                        f"quote_asset = '{quote_asset}'",
-                        f"close_time >= '{timerange.startdt.isoformat()}'",
-                        f"close_time <= '{timerange.stopdt.isoformat()}'"])\
+            vdf:vDataFrame = vDataFrame(hist_table)\
+                .filter([f"base_asset = '{base}'",
+                        f"quote_asset = '{quote}'",
+                        f"close_time >= '{timerange.startdt.isoformat()}'::TIMESTAMPTZ ",
+                        f"close_time <= '{timerange.stopdt.isoformat()}'::TIMESTAMPTZ"])\
                 .interpolate(
                     ts = "close_time",
                     rule = interval,
@@ -1896,64 +1894,9 @@ class Backtesting(BaseBacktesting):
                         "close": "linear", 
                         "volume": "linear"
                     })\
-                .eval("price_avg", "AVG(close) OVER(ORDER BY close_time ROWS BETWEEN 100 PRECEDING AND CURRENT ROW)")\
-                .eval("delta_avg", "(close - price_avg) / NULLIF(price_avg, 0) * 100")\
-                .select(["close_time as ts", "open", "high", "low", "close", "volume", "delta_avg"])
+                .eval("date", "close_time::TIMESTAMPTZ")\
+                .select(["date", "open", "high", "low", "close", "volume"])
 
-            predictions:vDataFrame = vDataFrame(trades_table).filter([
-                    f"base_asset = '{base_asset}'",
-                    f"quote_asset = '{quote_asset}'",
-                    f"ts >= '{timerange.startdt.isoformat()}'",
-                    f"ts <= '{timerange.stopdt.isoformat()}'"])
-            models = list(predictions["model"].distinct())
-
-            for m in models: 
-                predictions.eval(f"{m}_PRED", f"CASE WHEN model = '{m}' THEN predicted ELSE null END")
-                predictions.eval(f"{m}_PROB", f"CASE WHEN model = '{m}' THEN probability ELSE null END")
-
-            predictions = predictions.groupby(
-                    columns=["ts"],
-                    expr=[f"ARGMAX_AGG({m}_PROB, {m}_PRED) as {m}_PRED" for m in models] + [f"MAX({m}_PROB) as {m}_PROB" for m in models])\
-                .interpolate(
-                    ts = "ts",
-                    rule = interval,
-                    method = { f"{m}_PRED": "ffill" for m in models } | { f"{m}_PROB": "linear" for m in models })
-
-            vdf:vDataFrame = hist_data.join(predictions,
-                    how="left",
-                    on_interpolate={"ts": "ts"},
-                    expr1 = [ "*" ],
-                    expr2 = [f"{m}_PRED" for m in models] + [f"{m}_PROB" for m in models]
-                )
-
-            for m in models:
-                vdf.eval(f"{m}_BUY_PROB", f"CASE WHEN {m}_PRED = 'Buy' THEN {m}_PROB ELSE 0 END")
-                vdf.eval(f"{m}_SELL_PROB", f"CASE WHEN {m}_PRED = 'Sell' THEN {m}_PROB ELSE 0 END")
-            
-            models_buy = ', '.join([f'{m}_BUY_PROB' for m in models])
-            models_sell = ', '.join([f'{m}_SELL_PROB' for m in models])
-            vdf.eval("AVG_BUY_PROB", f"APPLY_AVG(ARRAY[{models_buy}])")
-            vdf.eval("AVG_SELL_PROB", f"APPLY_AVG(ARRAY[{models_sell}])")
-            vdf.eval("AVG_PRED", f"CASE WHEN AVG_BUY_PROB > AVG_SELL_PROB THEN 'Buy' ELSE 'Sell' END")
-            vdf.eval("AVG_PROB", f"CASE WHEN AVG_BUY_PROB > AVG_SELL_PROB THEN AVG_BUY_PROB ELSE AVG_SELL_PROB END")
-
-            vdf = vdf.eval("date", "ts::TIMESTAMPTZ")\
-                .select([
-                    "date",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "delta_avg",
-                    "AVG_PRED",
-                    "AVG_PROB",
-                    "AVG_BUY_PROB",
-                    "AVG_SELL_PROB"] + 
-                    [f"{m}_PRED" for m in models] + 
-                    [f"{m}_PROB" for m in models]
-                    )
-            
             return vdf.to_pandas()
 
     def get_timerange(self, data: dict[str, DataFrame]) -> tuple[datetime, datetime]:
