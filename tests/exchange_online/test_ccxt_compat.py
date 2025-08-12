@@ -380,6 +380,10 @@ class TestCCXTExchange:
         this_hour = timeframe_to_prev_date(expected_tf)
         prev_hour = timeframe_to_prev_date(expected_tf, this_hour - timedelta(minutes=1))
 
+        # Mark price must be available for the currently open candle (as well as older candles,
+        # even though the test only asserts the last two).
+        # This is a requirement to have funding fee calculations available correctly and timely
+        # right as the funding fee applies (e.g. at 08:00).
         assert mark_candles[mark_candles["date"] == prev_hour].iloc[0]["open"] != 0.0
         assert mark_candles[mark_candles["date"] == this_hour].iloc[0]["open"] != 0.0
 
@@ -395,12 +399,13 @@ class TestCCXTExchange:
         assert isinstance(funding_fee, float)
         assert funding_fee != 0
 
-    def test_ccxt__async_get_trade_history(self, exchange: EXCHANGE_FIXTURE_TYPE):
+    def test_ccxt__async_get_trade_history(self, exchange: EXCHANGE_FIXTURE_TYPE, mocker):
         exch, exchangename = exchange
         if not (lookback := EXCHANGES[exchangename].get("trades_lookback_hours")):
             pytest.skip("test_fetch_trades not enabled for this exchange")
         pair = EXCHANGES[exchangename]["pair"]
         since = int((datetime.now(UTC) - timedelta(hours=lookback)).timestamp() * 1000)
+        nvspy = mocker.spy(exch, "_get_trade_pagination_next_value")
         res = exch.loop.run_until_complete(exch._async_get_trade_history(pair, since, None, None))
         assert len(res) == 2
         res_pair, res_trades = res
@@ -408,6 +413,14 @@ class TestCCXTExchange:
         assert isinstance(res_trades, list)
         assert res_trades[0][0] >= since
         assert len(res_trades) > 1200
+        assert nvspy.call_count > 5
+        if exchangename == "kraken":
+            # for Kraken, the pagination value is added to the last trade result by ccxt.
+            # We therefore expect that the last row has one additional field
+
+            # Pick a random spy call
+            trades_orig = nvspy.call_args_list[2][0][0]
+            assert len(trades_orig[-1].get("info")) > len(trades_orig[-2].get("info"))
 
     def test_ccxt_get_fee(self, exchange: EXCHANGE_FIXTURE_TYPE):
         exch, exchangename = exchange
@@ -517,3 +530,35 @@ class TestCCXTExchange:
         exch, exchangename = exchange
         for method in EXCHANGES[exchangename].get("private_methods", []):
             assert hasattr(exch._api, method)
+
+    def test_ccxt_bitget_ohlcv_candle_limit(self, exchange: EXCHANGE_FIXTURE_TYPE):
+        exch, exchangename = exchange
+        if exchangename != "bitget":
+            pytest.skip("This test is only for the Bitget exchange")
+
+        timeframes = ("1m", "5m", "1h")
+
+        for timeframe in timeframes:
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.SPOT) == 1000
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUTURES) == 1000
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.MARK) == 200
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUNDING_RATE) == 200
+
+            start_time = dt_ts(dt_now() - timedelta(days=17))
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.SPOT, start_time) == 1000
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUTURES, start_time) == 1000
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.MARK, start_time) == 200
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUNDING_RATE, start_time) == 200
+            start_time = dt_ts(dt_now() - timedelta(days=48))
+            length = 200 if timeframe in ("1m", "5m") else 1000
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.SPOT, start_time) == length
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUTURES, start_time) == length
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.MARK, start_time) == 200
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUNDING_RATE, start_time) == 200
+
+            start_time = dt_ts(dt_now() - timedelta(days=61))
+            length = 200
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.SPOT, start_time) == length
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUTURES, start_time) == length
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.MARK, start_time) == 200
+            assert exch.ohlcv_candle_limit(timeframe, CandleType.FUNDING_RATE, start_time) == 200
