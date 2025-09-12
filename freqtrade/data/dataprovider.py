@@ -23,7 +23,7 @@ from freqtrade.data.history import get_datahandler, load_pair_history
 from freqtrade.enums import CandleType, RPCMessageType, RunMode, TradingMode
 from freqtrade.exceptions import ExchangeError, OperationalException
 from freqtrade.exchange import Exchange, timeframe_to_prev_date, timeframe_to_seconds
-from freqtrade.exchange.exchange_types import OrderBook
+from freqtrade.exchange.exchange_types import FundingRate, OrderBook
 from freqtrade.misc import append_candles_to_dataframe
 from freqtrade.rpc import RPCManager
 from freqtrade.rpc.rpc_types import RPCAnalyzedDFMsg
@@ -498,7 +498,12 @@ class DataProvider:
             return DataFrame()
 
     def trades(
-        self, pair: str, timeframe: str | None = None, copy: bool = True, candle_type: str = ""
+        self,
+        pair: str,
+        timeframe: str | None = None,
+        copy: bool = True,
+        candle_type: str = "",
+        timerange: TimeRange | None = None,
     ) -> DataFrame:
         """
         Get candle (TRADES) data for the given pair as DataFrame
@@ -526,7 +531,7 @@ class DataProvider:
                 self._config["datadir"], data_format=self._config["dataformat_trades"]
             )
             trades_df = data_handler.trades_load(
-                pair, self._config.get("trading_mode", TradingMode.SPOT)
+                pair, self._config.get("trading_mode", TradingMode.SPOT), timerange=timerange
             )
             return trades_df
 
@@ -543,6 +548,7 @@ class DataProvider:
     def ticker(self, pair: str):
         """
         Return last ticker data from exchange
+        Warning: Performs a network request - so use with common sense.
         :param pair: Pair to get the data for
         :return: Ticker dict from exchange or empty dict if ticker is not available for the pair
         """
@@ -556,7 +562,7 @@ class DataProvider:
     def orderbook(self, pair: str, maximum: int) -> OrderBook:
         """
         Fetch latest l2 orderbook data
-        Warning: Does a network request - so use with common sense.
+        Warning: Performs a network request - so use with common sense.
         :param pair: pair to get the data for
         :param maximum: Maximum number of orderbook entries to query
         :return: dict including bids/asks with a total of `maximum` entries.
@@ -564,6 +570,23 @@ class DataProvider:
         if self._exchange is None:
             raise OperationalException(NO_EXCHANGE_EXCEPTION)
         return self._exchange.fetch_l2_order_book(pair, maximum)
+
+    def funding_rate(self, pair: str) -> FundingRate:
+        """
+        Return Funding rate from the exchange
+        Warning: Performs a network request - so use with common sense.
+        :param pair: Pair to get the data for
+        :return: Funding rate dict from exchange or empty dict if funding rate is not available
+            If available, the "fundingRate" field will contain the funding rate.
+            "fundingTimestamp" and "fundingDatetime" will contain the next funding times.
+            Actually filled fields may vary between exchanges.
+        """
+        if self._exchange is None:
+            raise OperationalException(NO_EXCHANGE_EXCEPTION)
+        try:
+            return self._exchange.fetch_funding_rate(pair)
+        except ExchangeError:
+            return {}
 
     def send_msg(self, message: str, *, always_send: bool = False) -> None:
         """

@@ -45,7 +45,6 @@ class Binance(Exchange):
         "funding_fee_candle_limit": 1000,
         "stoploss_order_types": {"limit": "stop", "market": "stop_market"},
         "stoploss_blocks_assets": False,  # Stoploss orders do not block assets
-        "order_time_in_force": ["GTC", "FOK", "IOC"],
         "tickers_have_price": False,
         "floor_leverage": True,
         "fetch_orders_limit_minutes": 7 * 1440,  # "fetch_orders" is limited to 7 days
@@ -392,7 +391,7 @@ class Binance(Exchange):
     async def _async_get_trade_history_id(
         self, pair: str, until: int, since: int, from_id: str | None = None
     ) -> tuple[str, list[list]]:
-        logger.info(f"Fetching trades from Binance, {from_id=}, {since=}, {until=}")
+        logger.info(f"Fetching trades for {pair} from Binance, {from_id=}, {since=}, {until=}")
 
         if not self._config["exchange"].get("only_from_ccxt", False):
             if from_id is None or not since:

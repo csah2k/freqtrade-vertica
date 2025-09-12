@@ -454,6 +454,11 @@ AVAILABLE_CLI_OPTIONS = {
         help="Also download data from inactive pairs.",
         action="store_true",
     ),
+    "no_parallel_download": Arg(
+        "--no-parallel-download",
+        help="Disable parallel startup download. Only use this if you experience issues.",
+        action="store_true",
+    ),
     "new_pairs_days": Arg(
         "--new-pairs-days",
         help="Download data of new pairs for given number of days. Default: `%(default)s`.",
@@ -800,6 +805,14 @@ AVAILABLE_CLI_OPTIONS = {
         "--startup-candle",
         help="Specify startup candles to be checked (`199`, `499`, `999`, `1999`).",
         nargs="+",
+    ),
+    "lookahead_allow_limit_orders": Arg(
+        "--allow-limit-orders",
+        help=(
+            "Allow limit orders in lookahead analysis (could cause false positives "
+            "in lookahead analysis results)."
+        ),
+        action="store_true",
     ),
     "show_sensitive": Arg(
         "--show-sensitive",
