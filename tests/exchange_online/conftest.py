@@ -1,5 +1,6 @@
 from copy import deepcopy
 from pathlib import Path
+from typing import Any, TypedDict
 
 import pytest
 
@@ -9,12 +10,33 @@ from freqtrade.resolvers.exchange_resolver import ExchangeResolver
 from tests.conftest import EXMS, get_default_conf_usdt
 
 
-EXCHANGE_FIXTURE_TYPE = tuple[Exchange, str]
+class TestExchangeOnlineSetup(TypedDict):
+    pair: str
+    stake_currency: str
+    use_ci_proxy: bool
+    hasQuoteVolume: bool
+    timeframe: str
+    candle_count: int
+    futures: bool
+    futures_only: bool | None
+    futures_pair: str | None
+    candle_count_futures: int | None
+    hasQuoteVolumeFutures: bool | None
+    leverage_tiers_public: bool
+    leverage_in_spot_market: bool
+    trades_lookback_hours: int
+    private_methods: list[str] | None
+    sample_order: list[dict[str, Any]] | None
+    sample_order_futures: list[dict[str, Any]] | None
+    sample_my_trades: list[dict[str, Any]] | None
+    skip_ws_tests: bool | None
+
+
+EXCHANGE_FIXTURE_TYPE = tuple[Exchange, str, TestExchangeOnlineSetup]
 EXCHANGE_WS_FIXTURE_TYPE = tuple[Exchange, str, str]
 
-
 # Exchanges that should be tested online
-EXCHANGES = {
+EXCHANGES: dict[str, TestExchangeOnlineSetup] = {
     "binance": {
         "pair": "BTC/USDT",
         "stake_currency": "USDT",
@@ -24,6 +46,7 @@ EXCHANGES = {
         "candle_count": 1000,
         "futures": True,
         "futures_pair": "BTC/USDT:USDT",
+        "candle_count_futures": 499,
         "hasQuoteVolumeFutures": True,
         "leverage_tiers_public": False,
         "leverage_in_spot_market": False,
@@ -56,11 +79,12 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "3551312894",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
                     "status": "open",
+                    "side": "buy",
                     "amount": 1.1,
                 },
             },
@@ -86,11 +110,12 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "3551312894",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "side": "buy",
+                    "status": "closed",
                     "amount": 1.1,
                 },
             },
@@ -127,9 +152,9 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "3551312894",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
                     "status": "open",
                     "amount": 1.1,
@@ -182,12 +207,12 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
-                    "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
-                    "price": 15.5,
-                    "status": "open",
-                    "amount": 1.1,
+                    "id": "63d6742d0adc5570001d2bbf7",
+                    "timestamp": None,
+                    "datetime": None,
+                    "price": None,
+                    "status": None,
+                    "amount": None,
                 },
             },  # create order
             {
@@ -226,11 +251,11 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "63d6742d0adc5570001d2bbf7",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "status": "closed",
                     "amount": 1.1,
                 },
             },
@@ -244,6 +269,7 @@ EXCHANGES = {
         "candle_count": 1000,
         "futures": True,
         "futures_pair": "BTC/USDT:USDT",
+        "candle_count_futures": 1999,
         "hasQuoteVolumeFutures": True,
         "leverage_tiers_public": True,
         "leverage_in_spot_market": True,
@@ -282,11 +308,12 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "276266139423",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "average": 15.5,
+                    "status": "closed",
                     "amount": 1.1,
                 },
             },
@@ -325,11 +352,11 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "276401180529",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "status": "canceled",
                     "amount": 1.1,
                 },
             },
@@ -398,10 +425,11 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "1274754916287346280",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
+                    "side": "buy",
                     "status": "open",
                     "amount": 1.1,
                 },
@@ -422,6 +450,10 @@ EXCHANGES = {
         "hasQuoteVolume": True,
         "timeframe": "1h",
         "candle_count": 1000,
+        "futures": True,
+        "futures_pair": "BTC/USDT:USDT",
+        "leverage_tiers_public": True,
+        "leverage_in_spot_market": True,
     },
     "coinex": {
         "pair": "BTC/USDT",
@@ -431,14 +463,13 @@ EXCHANGES = {
         "candle_count": 1000,
         "orderbook_max_entries": 50,
     },
-    # TODO: re-enable htx once certificates work again
-    # "htx": {
-    #     "pair": "ETH/BTC",
-    #     "stake_currency": "BTC",
-    #     "hasQuoteVolume": True,
-    #     "timeframe": "1h",
-    #     "candle_count": 1000,
-    # },
+    "htx": {
+        "pair": "ETH/BTC",
+        "stake_currency": "BTC",
+        "hasQuoteVolume": True,
+        "timeframe": "1h",
+        "candle_count": 1000,
+    },
     "bitvavo": {
         "pair": "BTC/EUR",
         "stake_currency": "EUR",
@@ -474,18 +505,19 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "1762393630149869568",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "average": 15.5,
+                    "status": "closed",
                     "amount": 1.1,
                 },
             },
             {
                 "exchange_response": {
                     "symbol": "SOL-USDT",
-                    "orderId": "1762393630149869568",
+                    "orderId": "1762393630149869567",
                     "transactTime": "1674493798550",
                     "price": "15.5",
                     "stopPrice": "0",
@@ -500,18 +532,19 @@ EXCHANGES = {
                 "pair": "SOL/USDT",
                 "expected": {
                     "symbol": "SOL/USDT",
-                    "orderId": "3551312894",
+                    "id": "1762393630149869567",
                     "timestamp": 1674493798550,
-                    "datetime": "2023-03-25T15:49:58.550Z",
+                    "datetime": "2023-01-23T17:09:58.550Z",
                     "price": 15.5,
-                    "status": "open",
+                    "average": 15.5,
+                    "status": "closed",
                     "amount": 1.1,
                 },
             },
         ],
     },
     "hyperliquid": {
-        "pair": "UBTC/USDC",
+        "pair": "BTC/USDC",
         "stake_currency": "USDC",
         "hasQuoteVolume": False,
         "timeframe": "30m",
@@ -519,13 +552,147 @@ EXCHANGES = {
         "candle_count": 5000,
         "orderbook_max_entries": 20,
         "futures_pair": "BTC/USDC:USDC",
+        # Assert that HIP3 pairs are fetched as part of load_markets
+        "futures_alt_pairs": ["XYZ-NVDA/USDC:USDC", "VNTL-ANTHROPIC/USDH:USDH"],
         "hasQuoteVolumeFutures": True,
         "leverage_tiers_public": False,
         "leverage_in_spot_market": False,
         # TODO: re-enable hyperliquid websocket tests
         "skip_ws_tests": True,
     },
+    "krakenfutures": {
+        "pair": "BTC/USD:USD",
+        "stake_currency": "USD",
+        "hasQuoteVolume": False,
+        "skip_ws_tests": True,
+        "timeframe": "1h",
+        "futures": True,
+        "futures_only": True,
+        "candle_count": 2000,
+        "futures_pair": "BTC/USD:USD",
+        "hasQuoteVolumeFutures": False,
+        "leverage_tiers_public": True,
+        "sample_order_futures": [
+            {
+                # Regular market order
+                "exchange_response": {
+                    "uid": "a11a8dc2-0440-4fe1-5212-1bx15c8f1c8e",
+                    "accountUid": "cabdb242-5111-4dac-bac-76f33395d76d",
+                    "tradeable": "PF_XBTUSD",
+                    "direction": "Sell",
+                    "quantity": "0",
+                    "filled": "0.0004",
+                    "timestamp": 1771354195241,
+                    "limitPrice": "67164.00",
+                    "orderType": "IoC",
+                    "clientId": "",
+                    "reduceOnly": False,
+                    "lastUpdateTimestamp": 1771354195241,
+                    "regulatoryExternalUid": "ae198dd6-6be0-4014-8af-ebd472190648",
+                    "status": "closed",
+                },
+                "pair": "BTC/USD:USD",
+                "expected": {
+                    "symbol": "BTC/USD:USD",
+                    "id": "a11a8dc2-0440-4fe1-5212-1bx15c8f1c8e",
+                    "timestamp": 1771354195241,
+                    "datetime": "2026-02-17T18:49:55.241Z",
+                    "price": None,
+                    # Average should be None (it's not correct for market orders)
+                    "average": None,
+                    "status": "closed",
+                    "type": "market",
+                    "amount": 0.0004,
+                    "filled": 0.0004,
+                    "side": "sell",
+                    "triggerPrice": None,
+                    "stopPrice": None,
+                    "stopLossPrice": None,
+                },
+            },
+            {
+                # Trigger order
+                "exchange_response": {
+                    "order": {
+                        "type": "TRIGGER_ORDER",
+                        "orderId": "a11a8ff3-17f3-5112-8caa-9cbbacfa1c8e",
+                        "cliOrdId": None,
+                        "symbol": "PF_XBTUSD",
+                        "side": "buy",
+                        "quantity": 0.0004,
+                        "limitPrice": 71712,
+                        "reduceOnly": True,
+                        "timestamp": "2026-02-17T16:26:02.918Z",
+                        "lastUpdateTimestamp": "2026-02-17T16:26:02.918Z",
+                        "priceTriggerOptions": {
+                            "triggerPrice": 71641,
+                            "triggerSignal": "LAST_PRICE",
+                            "triggerSide": "TRIGGER_ABOVE",
+                            "limitPriceOffsetValue": None,
+                            "limitPriceOffsetUnit": None,
+                        },
+                    },
+                    "status": "TRIGGER_PLACED",
+                    "updateReason": None,
+                    "error": None,
+                },
+                "pair": "BTC/USD:USD",
+                "expected": {
+                    "symbol": "BTC/USD:USD",
+                    "id": "a11a8ff3-17f3-5112-8caa-9cbbacfa1c8e",
+                    "timestamp": 1771345562918,
+                    "datetime": "2026-02-17T16:26:02.918Z",
+                    # TODO: re-verify this ...
+                    # "price": 71712.0,
+                    "price": None,
+                    "status": "open",
+                    "amount": 0.0004,
+                    # TODO: filled should be 0, not None.
+                    "filled": None,
+                    "side": "buy",
+                    "triggerPrice": 71641.0,
+                    "stopPrice": 71641.0,
+                    # krakenfutures uses stopPrice - so this is fine.
+                    "stopLossPrice": None,
+                },
+            },
+            {
+                # Canceled order
+                "exchange_response": {
+                    "order": {
+                        "type": "ORDER",
+                        "orderId": "a159faef-6a0f-4651-bb78-xxfa4c71ac7e",
+                        "cliOrdId": None,
+                        "symbol": "PF_XBTUSD",
+                        "side": "buy",
+                        "quantity": 0.0022,
+                        "filled": 0,
+                        "limitPrice": 68000,
+                        "reduceOnly": False,
+                        "timestamp": "2026-03-21T07:32:21.555Z",
+                        "lastUpdateTimestamp": "2026-03-21T07:32:21.555Z",
+                    },
+                    "status": "CANCELLED",
+                    "updateReason": "CANCELLED_BY_USER",
+                    "error": None,
+                },
+                "pair": "BTC/USD:USD",
+                "expected": {
+                    "symbol": "BTC/USD:USD",
+                    "id": "a159faef-6a0f-4651-bb78-xxfa4c71ac7e",
+                    "timestamp": 1774078341555,
+                    "datetime": "2026-03-21T07:32:21.555Z",
+                    "price": None,
+                    "status": "canceled",
+                    "filled": 0.0,
+                },
+            },
+        ],
+    },
 }
+
+EXCHANGES_FUTURES = [exch for exch, params in EXCHANGES.items() if params.get("futures")]
+EXCHANGES_SPOT = [exch for exch, params in EXCHANGES.items() if not params.get("futures_only")]
 
 
 @pytest.fixture(scope="class")
@@ -555,54 +722,56 @@ def set_test_proxy(config: Config, use_proxy: bool) -> Config:
     return config
 
 
-def get_exchange(exchange_name, exchange_conf):
-    exchange_conf = set_test_proxy(
-        exchange_conf, EXCHANGES[exchange_name].get("use_ci_proxy", False)
-    )
+def get_exchange(exchange_name, exchange_conf, class_mocker):
+    exchange_params = EXCHANGES[exchange_name]
+    exchange_conf = set_test_proxy(exchange_conf, exchange_params.get("use_ci_proxy", False))
     exchange_conf["exchange"]["name"] = exchange_name
-    exchange_conf["stake_currency"] = EXCHANGES[exchange_name]["stake_currency"]
+    exchange_conf["stake_currency"] = exchange_params["stake_currency"]
+    class_mocker.patch(f"{EXMS}.ft_additional_exchange_init")
     exchange = ExchangeResolver.load_exchange(
         exchange_conf, validate=True, load_leverage_tiers=True
     )
 
-    return exchange, exchange_name
+    return exchange, exchange_name, exchange_params
 
 
 def get_futures_exchange(exchange_name, exchange_conf, class_mocker):
-    if EXCHANGES[exchange_name].get("futures") is not True:
+    exchange_params = EXCHANGES[exchange_name]
+
+    if exchange_params.get("futures") is not True:
         pytest.skip(f"Exchange {exchange_name} does not support futures.")
-    else:
-        exchange_conf = deepcopy(exchange_conf)
-        exchange_conf = set_test_proxy(
-            exchange_conf, EXCHANGES[exchange_name].get("use_ci_proxy", False)
-        )
-        exchange_conf["trading_mode"] = "futures"
-        exchange_conf["margin_mode"] = "isolated"
+    exchange_conf = deepcopy(exchange_conf)
+    exchange_conf = set_test_proxy(exchange_conf, exchange_params.get("use_ci_proxy", False))
+    exchange_conf["exchange"]["name"] = exchange_name
+    exchange_conf["stake_currency"] = exchange_params["stake_currency"]
+    exchange_conf["trading_mode"] = "futures"
+    exchange_conf["margin_mode"] = "isolated"
 
-        class_mocker.patch("freqtrade.exchange.binance.Binance.fill_leverage_tiers")
-        class_mocker.patch(f"{EXMS}.fetch_trading_fees")
-        class_mocker.patch("freqtrade.exchange.okx.Okx.additional_exchange_init")
-        class_mocker.patch("freqtrade.exchange.binance.Binance.additional_exchange_init")
-        class_mocker.patch("freqtrade.exchange.bybit.Bybit.additional_exchange_init")
-        class_mocker.patch("freqtrade.exchange.gate.Gate.additional_exchange_init")
-        class_mocker.patch(f"{EXMS}.load_cached_leverage_tiers", return_value=None)
-        class_mocker.patch(f"{EXMS}.cache_leverage_tiers")
+    class_mocker.patch("freqtrade.exchange.binance.Binance.fill_leverage_tiers")
+    class_mocker.patch(f"{EXMS}.fetch_trading_fees")
+    class_mocker.patch(f"{EXMS}.ft_additional_exchange_init")
+    class_mocker.patch(f"{EXMS}.load_cached_leverage_tiers", return_value=None)
+    class_mocker.patch(f"{EXMS}.cache_leverage_tiers")
 
-        return get_exchange(exchange_name, exchange_conf)
+    exchange = ExchangeResolver.load_exchange(
+        exchange_conf, validate=True, load_leverage_tiers=True
+    )
+    return exchange, exchange_name, exchange_params
 
 
-@pytest.fixture(params=EXCHANGES, scope="class")
+@pytest.fixture(params=EXCHANGES_SPOT, scope="class")
 def exchange(request, exchange_conf, class_mocker):
-    class_mocker.patch("freqtrade.exchange.bybit.Bybit.additional_exchange_init")
-    exchange, name = get_exchange(request.param, exchange_conf)
-    yield exchange, name
+    exchange, name, exchange_params = get_exchange(request.param, exchange_conf, class_mocker)
+    yield exchange, name, exchange_params
     exchange.close()
 
 
-@pytest.fixture(params=EXCHANGES, scope="class")
+@pytest.fixture(params=EXCHANGES_FUTURES, scope="class")
 def exchange_futures(request, exchange_conf, class_mocker):
-    exchange, name = get_futures_exchange(request.param, exchange_conf, class_mocker)
-    yield exchange, name
+    exchange, name, exchange_params = get_futures_exchange(
+        request.param, exchange_conf, class_mocker
+    )
+    yield exchange, name, exchange_params
     exchange.close()
 
 
@@ -613,16 +782,15 @@ def exchange_mode(request):
 
 @pytest.fixture(params=EXCHANGES, scope="class")
 def exchange_ws(request, exchange_conf, exchange_mode, class_mocker):
-    class_mocker.patch("freqtrade.exchange.bybit.Bybit.additional_exchange_init")
     exchange_conf["exchange"]["enable_ws"] = True
     exchange_param = EXCHANGES[request.param]
     if exchange_param.get("skip_ws_tests"):
         pytest.skip(f"{request.param} does not support websocket tests.")
     if exchange_mode == "spot":
-        exchange, name = get_exchange(request.param, exchange_conf)
+        exchange, name, _ = get_exchange(request.param, exchange_conf, class_mocker)
         pair = exchange_param["pair"]
     elif exchange_param.get("futures"):
-        exchange, name = get_futures_exchange(
+        exchange, name, _ = get_futures_exchange(
             request.param, exchange_conf, class_mocker=class_mocker
         )
         pair = exchange_param["futures_pair"]

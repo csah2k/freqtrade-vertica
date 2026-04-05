@@ -3,12 +3,23 @@
 import logging
 from copy import deepcopy
 from datetime import datetime
+from typing import Any
+
+import ccxt
 
 from freqtrade.constants import BuySell
 from freqtrade.enums import MarginMode, TradingMode
-from freqtrade.exceptions import ExchangeError, OperationalException
+from freqtrade.enums.runmode import NON_UTIL_MODES
+from freqtrade.exceptions import (
+    ConfigurationError,
+    DDosProtection,
+    ExchangeError,
+    OperationalException,
+    TemporaryError,
+)
 from freqtrade.exchange import Exchange
-from freqtrade.exchange.exchange_types import CcxtOrder, FtHas
+from freqtrade.exchange.common import retrier
+from freqtrade.exchange.exchange_types import CcxtBalances, CcxtOrder, CcxtPosition, FtHas
 from freqtrade.util.datetime_helpers import dt_from_ts
 
 
@@ -19,6 +30,8 @@ class Hyperliquid(Exchange):
     """Hyperliquid exchange class.
     Contains adjustments needed for Freqtrade to work with this exchange.
     """
+
+    unified_account = False
 
     _ft_has: FtHas = {
         "ohlcv_has_history": False,
@@ -36,9 +49,9 @@ class Hyperliquid(Exchange):
         "stoploss_order_types": {"limit": "limit"},
         "stoploss_blocks_assets": False,
         "stop_price_prop": "stopPrice",
-        "funding_fee_timeframe": "1h",
         "funding_fee_candle_limit": 500,
         "uses_leverage_tiers": False,
+        "mark_ohlcv_price": "futures",
     }
 
     _supported_trading_mode_margin_pairs: list[tuple[TradingMode, MarginMode]] = [
@@ -55,6 +68,146 @@ class Hyperliquid(Exchange):
             config.update({"options": {"defaultType": "spot"}})
         config.update(super()._ccxt_config)
         return config
+
+    @retrier
+    def additional_exchange_init(self) -> None:
+        """
+        Additional exchange initialization logic.
+        .api will be available at this point.
+        Query User account Account Type to determine unified account status
+        https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#query-a-users-abstraction-state
+        """
+
+        try:
+            if self.trading_mode == TradingMode.FUTURES and not self._config["dry_run"]:
+                # Determine account status
+                # Unified accounts must use the spot endpoint for balances
+                request = {
+                    "type": "userAbstraction",
+                    "user": self._api.walletAddress,
+                }
+                response = self._api.publicPostInfo(request)
+                self.unified_account = response in ('"unifiedAccount"', '"portfolioMargin"')
+                if self.unified_account:
+                    logger.info("Unified Hyperliquid account detected.")
+
+        except ccxt.DDoSProtection as e:
+            raise DDosProtection(e) from e
+        except (ccxt.OperationFailed, ccxt.ExchangeError) as e:
+            raise TemporaryError(
+                f"Error in additional_exchange_init due to {e.__class__.__name__}. Message: {e}"
+            ) from e
+
+        except ccxt.BaseError as e:
+            raise OperationalException(e) from e
+
+    def _get_configured_hip3_dexes(self) -> list[str]:
+        """Get list of configured HIP-3 DEXes."""
+        return self._config.get("exchange", {}).get("hip3_dexes", [])
+
+    def validate_config(self, config: dict) -> None:
+        """Validate HIP-3 configuration at bot startup."""
+        super().validate_config(config)
+        configured = self._get_configured_hip3_dexes()
+        if not configured or not self.markets:
+            return
+        if self.trading_mode != TradingMode.FUTURES:
+            if configured:
+                raise ConfigurationError(
+                    "HIP-3 DEXes are only supported in FUTURES trading mode. "
+                    "Please update your configuration!"
+                )
+            return
+        if configured and self.margin_mode != MarginMode.ISOLATED:
+            raise ConfigurationError(
+                "HIP-3 DEXes require 'isolated' margin mode. "
+                f"Current margin mode: '{self.margin_mode.value}'. "
+                "Please update your configuration!"
+            )
+
+        available = {
+            m.get("info", {}).get("dex")
+            for m in self.get_markets(
+                quote_currencies=[self._config["stake_currency"]],
+                tradable_only=True,
+                active_only=True,
+            ).values()
+            if m.get("info", {}).get("hip3")
+        }
+        available.discard(None)
+
+        invalid = set(configured) - available
+        if invalid:
+            raise ConfigurationError(
+                f"Invalid HIP-3 DEXes configured: {sorted(invalid)}. "
+                f"Available DEXes matching your stake currency ({self._config['stake_currency']}): "
+                f"{sorted(available)}. "
+                f"Check your 'hip3_dexes' configuration!"
+            )
+
+    def market_is_tradable(self, market: dict[str, Any]) -> bool:
+        """Check if market is tradable, including HIP-3 markets."""
+        parent_check = super().market_is_tradable(market)
+
+        market_info = market.get("info", {})
+        if market_info.get("hip3") and self._config["runmode"] in NON_UTIL_MODES:
+            configured = self._get_configured_hip3_dexes()
+            if not configured:
+                return False
+
+            market_dex = market_info.get("dex")
+            return parent_check and market_dex in configured
+
+        return parent_check
+
+    def get_balances(self, params: dict | None = None) -> CcxtBalances:
+        """Fetch balances from default DEX and HIP-3 DEXes needed by tradable pairs.
+        This override is not absolutely necessary and is only there for correct used / total values
+        which are however not used by Freqtrade in futures mode at the moment.
+        """
+        params = params or {}
+        if self.unified_account:
+            params["type"] = "spot"
+        balances = super().get_balances(params)
+        if not self.unified_account:
+            # In unified accounts, the balance already includes all DEXes
+            dexes = self._get_configured_hip3_dexes()
+            for dex in dexes:
+                try:
+                    dex_balance = super().get_balances(params={"dex": dex})
+
+                    for currency, amount_info in dex_balance.items():
+                        if currency in ["info", "free", "used", "total", "datetime", "timestamp"]:
+                            continue
+
+                        if currency not in balances:
+                            balances[currency] = amount_info
+                        else:
+                            balances[currency]["free"] += amount_info["free"]
+                            balances[currency]["used"] += amount_info["used"]
+                            balances[currency]["total"] += amount_info["total"]
+
+                except Exception as e:
+                    logger.error(f"Could not fetch balance for HIP-3 DEX '{dex}': {e}")
+
+            if dexes:
+                self._log_exchange_response("fetch_balance", balances, add_info="combined")
+        return balances
+
+    def fetch_positions(
+        self, pair: str | None = None, params: dict | None = None
+    ) -> list[CcxtPosition]:
+        """Fetch positions from default DEX and HIP-3 DEXes needed by tradable pairs."""
+        positions = super().fetch_positions(pair)
+        dexes = self._get_configured_hip3_dexes()
+        for dex in dexes:
+            try:
+                positions.extend(super().fetch_positions(pair, params={"dex": dex}))
+            except Exception as e:
+                logger.error(f"Could not fetch positions from HIP-3 DEX '{dex}': {e}")
+        if dexes:
+            self._log_exchange_response("fetch_positions", positions, add_info="combined")
+        return positions
 
     def get_max_leverage(self, pair: str, stake_amount: float | None) -> float:
         # There are no leverage tiers

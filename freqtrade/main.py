@@ -6,7 +6,6 @@ Read the documentation to know what cli arguments you need.
 
 import logging
 import sys
-from typing import Any
 
 
 # check min. python version
@@ -18,7 +17,12 @@ from freqtrade.commands import Arguments
 from freqtrade.constants import DOCS_LINK
 from freqtrade.exceptions import ConfigurationError, FreqtradeException, OperationalException
 from freqtrade.loggers import setup_logging_pre
-from freqtrade.system import asyncio_setup, gc_set_threshold, print_version_info
+from freqtrade.system import (
+    asyncio_setup,
+    gc_set_threshold,
+    print_version_info,
+    set_mp_start_method,
+)
 
 
 logger = logging.getLogger("freqtrade")
@@ -30,7 +34,7 @@ def main(sysargv: list[str] | None = None) -> None:
     :return: None
     """
 
-    return_code: Any = 1
+    return_code: int | None = None
     try:
         setup_logging_pre()
         asyncio_setup()
@@ -44,6 +48,7 @@ def main(sysargv: list[str] | None = None) -> None:
         elif "func" in args:
             logger.info(f"freqtrade {__version__}")
             gc_set_threshold()
+            set_mp_start_method()
             return_code = args["func"](args)
         else:
             # No subcommand was issued.
@@ -56,11 +61,9 @@ def main(sysargv: list[str] | None = None) -> None:
                 "`freqtrade --help` or `freqtrade <command> --help`."
             )
 
-    except SystemExit as e:  # pragma: no cover
-        return_code = e
     except KeyboardInterrupt:
         logger.info("SIGINT received, aborting ...")
-        return_code = 0
+        return_code = 130
     except ConfigurationError as e:
         logger.error(
             f"Configuration error: {e}\n"
@@ -71,6 +74,7 @@ def main(sysargv: list[str] | None = None) -> None:
         return_code = 2
     except Exception:
         logger.exception("Fatal exception!")
+        return_code = 1
     finally:
         sys.exit(return_code)
 

@@ -2,11 +2,11 @@
 
 Pairlist Handlers define the list of pairs (pairlist) that the bot should trade. They are configured in the `pairlists` section of the configuration settings.
 
-In your configuration, you can use Static Pairlist (defined by the [`StaticPairList`](#static-pair-list) Pairlist Handler) and Dynamic Pairlist (defined by the [`VolumePairList`](#volume-pair-list) and [`PercentChangePairList`](#percent-change-pair-list) Pairlist Handlers).
+In your configuration, you can use Static Pairlist (defined by the [`StaticPairList`](#static-pair-list) Pairlist Handler) and Dynamic Pairlist (defined by the [`VolumePairList`](#volume-pair-list), [`CrossMarketPairList`](#crossmarketpairlist), [`MarketCapPairlist`](#marketcappairlist) and [`PercentChangePairList`](#percent-change-pair-list) Pairlist Handlers).
 
 Additionally, [`AgeFilter`](#agefilter), [`DelistFilter`](#delistfilter), [`PrecisionFilter`](#precisionfilter), [`PriceFilter`](#pricefilter), [`ShuffleFilter`](#shufflefilter), [`SpreadFilter`](#spreadfilter) and [`VolatilityFilter`](#volatilityfilter) act as Pairlist Filters, removing certain pairs and/or moving their positions in the pairlist.
 
-If multiple Pairlist Handlers are used, they are chained and a combination of all Pairlist Handlers forms the resulting pairlist the bot uses for trading and backtesting. Pairlist Handlers are executed in the sequence they are configured. You can define either `StaticPairList`, `VolumePairList`, `ProducerPairList`, `RemotePairList`, `MarketCapPairList` or `PercentChangePairList` as the starting Pairlist Handler.
+If multiple Pairlist Handlers are used, they are chained and a combination of all Pairlist Handlers forms the resulting pairlist the bot uses for trading and backtesting. Pairlist Handlers are executed in the sequence they are configured. You can define either `StaticPairList`, `VolumePairList`, `ProducerPairList`, `RemotePairList`, `MarketCapPairList`, `PercentChangePairList` or `CrossMarketPairList` as the starting Pairlist Handler.
 
 Inactive markets are always removed from the resulting pairlist. Explicitly blacklisted pairs (those in the `pair_blacklist` configuration setting) are also always removed from the resulting pairlist.
 
@@ -26,6 +26,7 @@ You may also use something like `.*DOWN/BTC` or `.*UP/BTC` to exclude leveraged 
 * [`ProducerPairList`](#producerpairlist)
 * [`RemotePairList`](#remotepairlist)
 * [`MarketCapPairList`](#marketcappairlist)
+* [`CrossMarketPairList`](#crossmarketpairlist)
 * [`AgeFilter`](#agefilter)
 * [`DelistFilter`](#delistfilter)
 * [`FullTradesFilter`](#fulltradesfilter)
@@ -303,6 +304,8 @@ The optional `mode` option specifies if the pairlist should be used as a `blackl
 
 The optional `processing_mode` option in the RemotePairList configuration determines how the retrieved pairlist is processed. It can have two values: "filter" or "append". The default value is "filter".
 
+The optional `number_assets` option in the RemotePairList configuration determines how many pairs will be returned if used in whitelist `mode`. By default, all pairs will be returned. In blacklist `mode`, this option will be ignored.
+
 In "filter" mode, the retrieved pairlist is used as a filter. Only the pairs present in both the original pairlist and the retrieved pairlist are included in the final pairlist. Other pairs are filtered out.
 
 In "append" mode, the retrieved pairlist is added to the original pairlist. All pairs from both lists are included in the final pairlist without any filtering.
@@ -367,7 +370,7 @@ The optional `bearer_token` will be included in the requests Authorization Heade
 
 #### MarketCapPairList
 
-`MarketCapPairList` employs sorting/filtering of pairs by their marketcap rank based of CoinGecko. The returned pairlist will be sorted based of their marketcap ranks.
+`MarketCapPairList` employs sorting/filtering of pairs by their marketcap rank based of CoinGecko. The returned pairlist will be sorted based of their marketcap ranks if used in whitelist `mode`.
 
 ```json
 "pairlists": [
@@ -376,15 +379,20 @@ The optional `bearer_token` will be included in the requests Authorization Heade
         "number_assets": 20,
         "max_rank": 50,
         "refresh_period": 86400,
+        "mode": "whitelist",
         "categories": ["layer-1"]
     }
 ]
 ```
 
-`number_assets` defines the maximum number of pairs returned by the pairlist. `max_rank` will determine the maximum rank used in creating/filtering the pairlist. It's expected that some coins within the top `max_rank` marketcap will not be included in the resulting pairlist since not all pairs will have active trading pairs in your preferred market/stake/exchange combination.  
+`number_assets` defines the maximum number of pairs returned by the pairlist if used in whitelist `mode`. In blacklist `mode`, this setting will be ignored.
+
+`max_rank` will determine the maximum rank used in creating/filtering the pairlist. It's expected that some coins within the top `max_rank` marketcap will not be included in the resulting pairlist since not all pairs will have active trading pairs in your preferred market/stake/exchange combination.  
 While using a `max_rank` bigger than 250 is supported, it's not recommended, as it'll cause multiple API calls to CoinGecko, which can lead to rate limit issues.
 
 The `refresh_period` setting defines the interval (in seconds) at which the marketcap rank data will be refreshed. The default is 86,400 seconds (1 day). The pairlist cache (`refresh_period`) applies to both generating pairlists (when in the first position in the list) and filtering instances (when not in the first position in the list).
+
+The `mode` setting defines whether the plugin will filters in (whitelist `mode`) or filters out (blacklist `mode`) top marketcap ranked coins. By default, the plugin will be in whitelist mode.
 
 The `categories` setting specifies the [coingecko categories](https://www.coingecko.com/en/categories) from which to select coins from. The default is an empty list `[]`, meaning no category filtering is applied.
 If an incorrect category string is chosen, the plugin will print the available categories from CoinGecko and fail. The category should be the ID of the category, for example, for `https://www.coingecko.com/en/categories/layer-1`, the category ID would be `layer-1`. You can pass multiple categories such as `["layer-1", "meme-token"]` to select from several categories.
@@ -396,6 +404,12 @@ Coins like 1000PEPE/USDT or KPEPE/USDT:USDT are detected on a best effort basis,
 
 !!! Danger "Duplicate symbols in coingecko"
     Coingecko often has duplicate symbols, where the same symbol is used for different coins. Freqtrade will use the symbol as is and try to search for it on the exchange. If the symbol exists - it will be used. Freqtrade will however not check if the _intended_ symbol is the one coingecko meant. This can sometimes lead to unexpected results, especially on low volume coins or with meme coin categories.
+
+#### CrossMarketPairList
+
+Generate or filter pairs based of their availability on the opposite market.
+
+The `pairs_exist_on` setting defines whether the pairs should exists on both spot and futures market (`both_markets`) or only exist on the specified trading mode (`current_market_only`). By default, the plugin will be in `both_markets` setting, which means whitelisted pairs have to exists on both spot and futures markets.
 
 #### AgeFilter
 
@@ -412,7 +426,7 @@ This filter allows freqtrade to ignore pairs until they have been listed for at 
 Removes pairs that will be delisted on the exchange maximum `max_days_from_now` days from now (defaults to `0` which remove all future delisted pairs no matter how far from now). Currently this filter only supports following exchanges:
 
 !!! Note "Available exchanges"
-    Delist filter is only available on Binance, where Binance Futures will work for both dry and live modes, while Binance Spot is limited to live mode (for technical reasons).
+    Delist filter is available on Bybit Futures, Bitget Futures and Binance, where Binance Futures will work for both dry and live modes, while Binance Spot is limited to live mode (for technical reasons).
 
 !!! Warning "Backtesting"
     `DelistFilter` does not support backtesting mode.

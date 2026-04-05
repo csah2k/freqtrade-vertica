@@ -10,7 +10,6 @@ from typing import Any
 
 import rapidjson
 import requests
-from cachetools import TTLCache
 
 from freqtrade import __version__
 from freqtrade.configuration.load_config import CONFIG_PARSE_MODE
@@ -18,6 +17,7 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.exchange.exchange_types import Tickers
 from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter, SupportsBacktesting
 from freqtrade.plugins.pairlist.pairlist_helpers import expand_pairlist
+from freqtrade.util import FtTTLCache
 
 
 logger = logging.getLogger(__name__)
@@ -31,12 +31,6 @@ class RemotePairList(IPairList):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        if "number_assets" not in self._pairlistconfig:
-            raise OperationalException(
-                "`number_assets` not specified. Please check your configuration "
-                'for "pairlist.config.number_assets"'
-            )
-
         if "pairlist_url" not in self._pairlistconfig:
             raise OperationalException(
                 "`pairlist_url` not specified. Please check your configuration "
@@ -45,10 +39,10 @@ class RemotePairList(IPairList):
 
         self._mode = self._pairlistconfig.get("mode", "whitelist")
         self._processing_mode = self._pairlistconfig.get("processing_mode", "filter")
-        self._number_pairs = self._pairlistconfig["number_assets"]
+        self._number_pairs: int | None = self._pairlistconfig.get("number_assets", None)
         self._refresh_period: int = self._pairlistconfig.get("refresh_period", 1800)
         self._keep_pairlist_on_failure = self._pairlistconfig.get("keep_pairlist_on_failure", True)
-        self._pair_cache: TTLCache = TTLCache(maxsize=1, ttl=self._refresh_period)
+        self._pair_cache: FtTTLCache = FtTTLCache(maxsize=1, ttl=self._refresh_period)
         self._pairlist_url = self._pairlistconfig.get("pairlist_url", "")
         self._read_timeout = self._pairlistconfig.get("read_timeout", 60)
         self._bearer_token = self._pairlistconfig.get("bearer_token", "")
@@ -72,20 +66,11 @@ class RemotePairList(IPairList):
                 "position of your pairlist."
             )
 
-    @property
-    def needstickers(self) -> bool:
-        """
-        Boolean property defining if tickers are necessary.
-        If no Pairlist requires tickers, an empty Dict is passed
-        as tickers argument to filter_pairlist
-        """
-        return False
-
     def short_desc(self) -> str:
         """
         Short whitelist method description - used for startup-messages
         """
-        return f"{self.name} - {self._pairlistconfig['number_assets']} pairs from RemotePairlist."
+        return f"{self.name} - {self._number_pairs or 'all'} pairs from RemotePairlist."
 
     @staticmethod
     def description() -> str:
@@ -102,7 +87,7 @@ class RemotePairList(IPairList):
             },
             "number_assets": {
                 "type": "number",
-                "default": 30,
+                "default": None,
                 "description": "Number of assets",
                 "help": "Number of assets to use from the pairlist.",
             },
@@ -159,7 +144,7 @@ class RemotePairList(IPairList):
             )
 
             self._refresh_period = remote_refresh_period
-            self._pair_cache = TTLCache(maxsize=1, ttl=remote_refresh_period)
+            self._pair_cache = FtTTLCache(maxsize=1, ttl=remote_refresh_period)
 
         self._init_done = True
 
@@ -257,7 +242,8 @@ class RemotePairList(IPairList):
 
         pairlist = expand_pairlist(pairlist, list(self._exchange.get_markets().keys()))
         pairlist = self._whitelist_for_active_markets(pairlist)
-        pairlist = pairlist[: self._number_pairs]
+        if self._number_pairs and (self._mode == "whitelist"):
+            pairlist = pairlist[: self._number_pairs]
 
         if pairlist:
             self._pair_cache["pairlist"] = pairlist.copy()
@@ -314,5 +300,6 @@ class RemotePairList(IPairList):
             if filtered:
                 self.log_once(f"Blacklist - Filtered out pairs: {filtered}", logger.info)
 
-        merged_list = merged_list[: self._number_pairs]
+        if self._number_pairs and (self._mode == "whitelist"):
+            merged_list = merged_list[: self._number_pairs]
         return merged_list

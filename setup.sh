@@ -6,6 +6,10 @@ function echo_block() {
     echo $1
     echo "----------------------------"
 }
+UV=false
+# Supported Python minor versions (order matters for detection)
+SUPPORTED_MINOR_VERS=(14 13 12 11)
+SUPPORTED_PY_VERSIONS="3.11, 3.12, 3.13 and 3.14"
 
 function check_installed_pip() {
    ${PYTHON} -m pip > /dev/null
@@ -24,19 +28,27 @@ function check_installed_python() {
         echo "You can do this by running 'deactivate'."
         exit 2
     fi
+    if [ -x "$(command -v uv)" ]; then
+        echo "uv detected — using it instead of pip for faster installation."
+        PIP="uv pip"
+        PYTHON="python3.13"
+        UV=true
+        return
+    fi
 
-    for v in 13 12 11
+    for v in "${SUPPORTED_MINOR_VERS[@]}"
     do
         PYTHON="python3.${v}"
         which $PYTHON
         if [ $? -eq 0 ]; then
             echo "using ${PYTHON}"
             check_installed_pip
+            PIP="${PYTHON} -m pip"
             return
         fi
     done
 
-    echo "No usable python found. Please make sure to have python3.11 or newer installed."
+    echo "No usable python found. Supported versions are: ${SUPPORTED_PY_VERSIONS}. Please install one of these."
     exit 1
 }
 
@@ -49,7 +61,7 @@ function updateenv() {
     source .venv/bin/activate
     SYS_ARCH=$(uname -m)
     echo "pip install in-progress. Please wait..."
-    ${PYTHON} -m pip install --upgrade pip wheel setuptools
+    ${PIP} install --upgrade pip wheel setuptools
     REQUIREMENTS_HYPEROPT=""
     REQUIREMENTS_PLOT=""
     REQUIREMENTS_FREQAI=""
@@ -70,7 +82,7 @@ function updateenv() {
         fi
         if [ "${SYS_ARCH}" == "armv7l" ] || [ "${SYS_ARCH}" == "armv6l" ]; then
             echo "Detected Raspberry, installing cython, skipping hyperopt installation."
-            ${PYTHON} -m pip install --upgrade cython
+            ${PIP} install --upgrade cython
         else
             # Is not Raspberry
             read -p "Do you want to install hyperopt dependencies [y/N]? "
@@ -83,7 +95,7 @@ function updateenv() {
         read -p "Do you want to install dependencies for freqai [y/N]? "
         if [[ $REPLY =~ ^[Yy]$ ]]
         then
-            REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
+            REQUIREMENTS_FREQAI="-r requirements-freqai.txt"
             read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
             if [[ $REPLY =~ ^[Yy]$ ]]
             then
@@ -92,12 +104,12 @@ function updateenv() {
         fi
     fi
 
-    ${PYTHON} -m pip install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} ${REQUIREMENTS_FREQAI} ${REQUIREMENTS_FREQAI_RL}
+    ${PIP} install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} ${REQUIREMENTS_FREQAI} ${REQUIREMENTS_FREQAI_RL}
     if [ $? -ne 0 ]; then
         echo "Failed installing dependencies"
         exit 1
     fi
-    ${PYTHON} -m pip install -e .
+    ${PIP} install -e .
     if [ $? -ne 0 ]; then
         echo "Failed installing Freqtrade"
         exit 1
@@ -179,7 +191,12 @@ function recreate_environments() {
     fi
 
     echo
-    ${PYTHON} -m venv .venv
+    if [ "$UV" = true ] ; then
+        echo "- Creating new virtual environment with uv"
+        uv venv .venv --python=${PYTHON}
+    else
+        ${PYTHON} -m venv .venv
+    fi
     if [ $? -ne 0 ]; then
         echo "Could not create virtual environment. Leaving now"
         exit 1
@@ -237,7 +254,7 @@ function install() {
         install_redhat
     else
         echo "This script does not support your OS."
-        echo "If you have Python version 3.11 - 3.13, pip, virtualenv installed you can continue."
+        echo "If you have Python version 3.11 - 3.14, pip, virtualenv installed you can continue."
         echo "Wait 10 seconds to continue the next install steps or use ctrl+c to interrupt this shell."
         sleep 10
     fi
@@ -252,7 +269,7 @@ function install() {
 
 function plot() {
     echo_block "Installing dependencies for Plotting scripts"
-    ${PYTHON} -m pip install plotly --upgrade
+    ${PIP} install plotly --upgrade
 }
 
 function help() {

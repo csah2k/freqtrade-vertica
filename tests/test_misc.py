@@ -19,6 +19,7 @@ from freqtrade.misc import (
     plural,
     safe_value_fallback,
     safe_value_fallback2,
+    safe_value_nested,
 )
 
 
@@ -91,6 +92,26 @@ def test_is_file_in_dir(tmp_path):
 def test_pair_to_filename(pair, expected_result):
     pair_s = pair_to_filename(pair)
     assert pair_s == expected_result
+
+
+def test_safe_value_nested():
+    dict1 = {
+        "first": {"rows": {"pass": "dog", "number": "1"}},
+        "second": "notadict",
+        "third": None,
+        "fourth": 15,
+    }
+    assert safe_value_nested(dict1, "first.rows.pass") == "dog"
+    assert safe_value_nested(dict1, "first.rows.fail", default_value="cat") == "cat"
+    assert safe_value_nested(dict1, "first") == dict1["first"]
+    assert safe_value_nested(dict1, "second.rows.pass") is None
+    assert safe_value_nested(dict1, "second.rows.pass", default_value="fallback") == "fallback"
+    assert safe_value_nested(dict1, "third.rows.pass", default_value="fallback") == "fallback"
+    assert safe_value_nested(dict1, "third.rows.pass") is None
+    assert safe_value_nested(dict1, "fourth.rows.pass") is None
+    assert safe_value_nested(dict1, "fourth") == 15
+    assert safe_value_nested(dict1, "fourth", default_value="fallback") == 15
+    assert safe_value_nested(dict1, "fourth.rows.pass", default_value="fallback") == "fallback"
 
 
 def test_safe_value_fallback():
@@ -168,12 +189,12 @@ def test_plural() -> None:
     "conn_url,expected",
     [
         (
-            "postgresql+psycopg2://scott123:scott123@host:1245/dbname",
-            "postgresql+psycopg2://scott123:*****@host:1245/dbname",
+            "postgresql+psycopg://scott123:scott123@host:1245/dbname",
+            "postgresql+psycopg://scott123:*****@host:1245/dbname",
         ),
         (
-            "postgresql+psycopg2://scott123:scott123@host.name.com/dbname",
-            "postgresql+psycopg2://scott123:*****@host.name.com/dbname",
+            "postgresql+psycopg://scott123:scott123@host.name.com/dbname",
+            "postgresql+psycopg://scott123:*****@host.name.com/dbname",
         ),
         (
             "mariadb+mariadbconnector://app_user:Password123!@127.0.0.1:3306/company",

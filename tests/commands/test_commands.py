@@ -83,6 +83,30 @@ def test_setup_utils_configuration():
     assert config["dry_run"] is False
 
 
+def test_setup_utils_configuration_download_convert_flag():
+    args = [
+        "download-data",
+        "--exchange",
+        "kraken",
+        "--pairs",
+        "ETH/USDT",
+        "--dl-trades",
+        "--convert",
+        "-t",
+        "1m",
+        "--timerange",
+        "20260101-",
+        "--config",
+        "tests/testdata/testconfigs/main_test_config.json",
+    ]
+
+    config = setup_utils_configuration(get_args(args), RunMode.UTIL_EXCHANGE)
+
+    assert config["download_trades"] is True
+    assert config["convert_trades"] is True
+    assert config["timeframes"] == ["1m"]
+
+
 def test_start_trading_fail(mocker, caplog):
     mocker.patch("freqtrade.worker.Worker.run", MagicMock(side_effect=OperationalException))
 
@@ -186,7 +210,8 @@ def test_list_exchanges(capsys):
     captured = capsys.readouterr()
     assert re.search(r"Exchanges available for Freqtrade.*", captured.out)
     assert re.search(r".*binance.*", captured.out)
-    assert not re.search(r".*kraken.*", captured.out)
+    assert re.search(r"\bkrakenfutures\b", captured.out)
+    assert not re.search(r"\bmyokx\b", captured.out)
 
 
 def test_list_timeframes(mocker, capsys):
@@ -198,6 +223,8 @@ def test_list_timeframes(mocker, capsys):
         "1h": "hour",
         "1d": "day",
     }
+    api_mock.options = {}
+
     patch_exchange(mocker, api_mock=api_mock, exchange="bybit")
     args = [
         "list-timeframes",
@@ -285,6 +312,52 @@ def test_list_timeframes(mocker, capsys):
     assert re.search(r"^5m$", captured.out, re.MULTILINE)
     assert re.search(r"^1h$", captured.out, re.MULTILINE)
     assert re.search(r"^1d$", captured.out, re.MULTILINE)
+
+    api_mock.options = {
+        "timeframes": {
+            "spot": {"1m": "1m", "5m": "5m", "15m": "15m"},
+            "swap": {"1m": "1m", "15m": "15m", "1h": "1h"},
+        }
+    }
+
+    args = [
+        "list-timeframes",
+        "--exchange",
+        "binance",
+    ]
+    start_list_timeframes(get_args(args))
+    captured = capsys.readouterr()
+    assert re.match(
+        "Timeframes available for the exchange `Binance`: 1m, 5m, 15m",
+        captured.out,
+    )
+
+    args = [
+        "list-timeframes",
+        "--exchange",
+        "binance",
+        "--trading-mode",
+        "spot",
+    ]
+    start_list_timeframes(get_args(args))
+    captured = capsys.readouterr()
+    assert re.match(
+        "Timeframes available for the exchange `Binance`: 1m, 5m, 15m",
+        captured.out,
+    )
+    args = [
+        "list-timeframes",
+        "--exchange",
+        "binance",
+        "--trading-mode",
+        "futures",
+    ]
+    start_list_timeframes(get_args(args))
+    captured = capsys.readouterr()
+    assert re.match(
+        "Timeframes available for the exchange `Binance`: 1m, 15m, 1h",
+        captured.out,
+    )
 
 
 def test_list_markets(mocker, markets_static, capsys):
@@ -1319,10 +1392,10 @@ def test_hyperopt_list(mocker, capsys, caplog, tmp_path):
             " 2/12",
             " 10/12",
             "Best result:",
-            "Buy hyperspace params",
-            "Sell hyperspace params",
-            "ROI table",
-            "Stoploss",
+            "Buy parameters",
+            "Sell parameters",
+            "ROI parameters",
+            "Stoploss parameters",
         ]
     )
     assert all(
@@ -1719,7 +1792,7 @@ def test_start_list_data(testdatadir, capsys):
     pargs["config"] = None
     start_list_data(pargs)
     captured = capsys.readouterr()
-    assert "Found 16 pair / timeframe combinations." in captured.out
+    assert "Found 18 pair / timeframe combinations." in captured.out
     assert re.search(r".*Pair.*Timeframe.*Type.*\n", captured.out)
     assert re.search(r"\n.* UNITTEST/BTC .* 1m, 5m, 8m, 30m .* spot |\n", captured.out)
 
@@ -1753,10 +1826,10 @@ def test_start_list_data(testdatadir, capsys):
     start_list_data(pargs)
     captured = capsys.readouterr()
 
-    assert "Found 6 pair / timeframe combinations." in captured.out
+    assert "Found 5 pair / timeframe combinations." in captured.out
     assert re.search(r".*Pair.*Timeframe.*Type.*\n", captured.out)
     assert re.search(r"\n.* XRP/USDT:USDT .* 5m, 1h .* futures |\n", captured.out)
-    assert re.search(r"\n.* XRP/USDT:USDT .* 1h, 8h .* mark |\n", captured.out)
+    assert re.search(r"\n.* XRP/USDT:USDT .* 1h.* mark |\n", captured.out)
 
     args = [
         "list-data",
