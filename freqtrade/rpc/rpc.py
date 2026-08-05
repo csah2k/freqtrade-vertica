@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from dateutil.relativedelta import relativedelta
 from dateutil.tz import tzlocal
-from numpy import inf, int64, isnan, mean, nan
-from pandas import DataFrame, NaT
+from numpy import inf, isnan, mean, nan
+from pandas import DataFrame, NaT, read_sql
 from sqlalchemy import func, select
 
 from freqtrade import __version__
@@ -176,6 +176,7 @@ class RPC:
                 timeframe_to_minutes(config["timeframe"]) if "timeframe" in config else 0
             ),
             "exchange": config["exchange"]["name"],
+            "demo_trading": config["exchange"].get("demo_trading", False),
             "strategy": config["strategy"],
             "force_entry_enable": config.get("force_entry_enable", False),
             "exit_pricing": config.get("exit_pricing", {}),
@@ -404,7 +405,7 @@ class RPC:
         profit_units: dict[date, dict] = {}
         daily_stake = self._freqtrade.wallets.get_total_stake_amount()
 
-        for day in range(0, timescale):
+        for day in range(timescale):
             profitday = start_date - time_offset(day)
             # Only query for necessary columns for performance reasons.
             trades = Trade.session.execute(
@@ -590,7 +591,7 @@ class RPC:
         """
         Returns cumulative profit statistics, with optional direction filter (long/short)
         """
-        start_date = datetime.fromtimestamp(0) if start_date is None else start_date
+        start_date = dt_from_ts(0) if start_date is None else start_date
 
         trade_filter = (
             Trade.is_open.is_(False) & (Trade.close_date >= start_date)
@@ -785,6 +786,26 @@ class RPC:
             "bot_start_date": format_date(bot_start),
         }
 
+    def _rpc_get_historic_balance(self) -> tuple[DataFrame, int]:
+        """
+        Returns the historic balance of the bot
+        :return: DataFrame with the balance history and the timestamp of the migration
+        """
+        results = read_sql("wallet_history", con=Trade.session.bind, parse_dates=["timestamp"])
+
+        results = results.rename({"timestamp": "date"}, axis=1)
+        results.loc[:, "__date_ts"] = results.loc[:, "date"].dt.as_unit("ms").astype("int64")
+        # Exclude non-bot managed for now
+        results_filtered = results.loc[results["bot_managed"].astype(bool)]
+
+        results_final = (
+            results_filtered.groupby(["date", "__date_ts"])
+            .agg({"total_quote": "sum"})
+            .reset_index()
+        )
+        hist = KeyValueStore.get_datetime_value("wallet_history_migration_date")
+        return results_final, dt_ts_def(hist, 0)
+
     def __balance_get_est_stake(
         self, coin: str, stake_currency: str, amount: float, balance: Wallet
     ) -> tuple[float, float]:
@@ -809,7 +830,6 @@ class RPC:
                 return est_stake, est_bot_stake
             except (ExchangeError, PricingError) as e:
                 logger.warning(f"Error {e} getting rate for {coin}")
-                pass
         return est_stake, est_bot_stake
 
     def _rpc_balance(self, stake_currency: str, fiat_display_currency: str) -> dict:
@@ -893,7 +913,6 @@ class RPC:
                             est_stake = pos.collateral * (1 + pos.leverage) - rate * pos.position
                 except (ExchangeError, PricingError) as e:
                     logger.warning(f"Error {e} getting rate for futures {symbol} / {pos_base}")
-                    pass
 
             # Add the estimated stake (collateral + unlevered PnL) to totals
             total += est_stake
@@ -1386,7 +1405,7 @@ class RPC:
         }
 
     def _rpc_locks(self) -> dict[str, Any]:
-        """Returns the  current locks"""
+        """Returns the current locks"""
 
         locks = PairLocks.get_pair_locks(None)
         return {"lock_count": len(locks), "locks": [lock.to_json() for lock in locks]}
@@ -1473,7 +1492,7 @@ class RPC:
             buffer = bufferHandler.buffer
         records = [
             [
-                format_date(datetime.fromtimestamp(r.created)),
+                format_date(dt_from_ts(r.created)),
                 r.created * 1000,
                 r.name,
                 r.levelname,
@@ -1516,7 +1535,9 @@ class RPC:
                 df_cols = [col for col in dataframe_columns if col in cols_set]
                 dataframe = dataframe.loc[:, df_cols]
 
-            dataframe.loc[:, "__date_ts"] = dataframe.loc[:, "date"].astype(int64) // 1000 // 1000
+            dataframe.loc[:, "__date_ts"] = (
+                dataframe.loc[:, "date"].dt.as_unit("ms").astype("int64")
+            )
             # Move signal close to separate column when signal for easy plotting
             for sig_type in signals.keys():
                 if sig_type in dataframe.columns:
@@ -1526,8 +1547,7 @@ class RPC:
 
             # band-aid until this is fixed:
             # https://github.com/pandas-dev/pandas/issues/45836
-            datetime_types = ["datetime", "datetime64", "datetime64[ns, UTC]"]
-            date_columns = dataframe.select_dtypes(include=datetime_types)
+            date_columns = dataframe.select_dtypes(include=["datetime", "datetime64", "datetimetz"])
             for date_column in date_columns:
                 # replace NaT with `None`
                 dataframe[date_column] = dataframe[date_column].astype(object).replace({NaT: None})
@@ -1673,8 +1693,11 @@ class RPC:
                     else dt_ts(dt_now() - timedelta(days=30)),
                     is_new_pair=True,  # history is never available - so always treat as new pair
                     candle_type=config.get("candle_type_def", CandleType.SPOT),
-                    until_ms=timerange_parsed.stopts,
+                    until_ms=timerange_parsed.stopts * 1000 if timerange_parsed.stopts else None,
                 )
+                if timerange_parsed.stopts and len(data) > 1:
+                    # trim last candle if it is newer than the stop time
+                    data = data.loc[data["date"] <= timerange_parsed.stopdt]
             else:
                 _data = load_data(
                     datadir=config["datadir"],
@@ -1697,9 +1720,15 @@ class RPC:
                 strategy.ft_bot_start()
 
                 df_analyzed = strategy.analyze_ticker(data, {"pair": pair})
+                prev_len = len(df_analyzed)
                 df_analyzed = trim_dataframe(
                     df_analyzed, timerange_parsed, startup_candles=startup_candles
                 )
+                if prev_len > 0 and len(df_analyzed) == 0:
+                    raise RPCException(
+                        f"After trimming by startup_candle_count, no data for "
+                        f"{pair}, {timeframe} in {config.get('timerange')} left."
+                    )
                 annotations = strategy.ft_plot_annotations(pair=pair, dataframe=df_analyzed)
 
             else:
@@ -1760,7 +1789,7 @@ class RPC:
 
     def health(self) -> dict[str, str | int | None]:
         last_p = self._freqtrade.last_process
-        res: dict[str, None | str | int] = {
+        res: dict[str, str | int | None] = {
             "last_process": None,
             "last_process_loc": None,
             "last_process_ts": None,

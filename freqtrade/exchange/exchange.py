@@ -13,12 +13,13 @@ from datetime import UTC, datetime, timedelta
 from math import floor, isnan
 from threading import Lock
 from typing import Any, Literal, TypeGuard, TypeVar
+from uuid import uuid4
 
 import ccxt
 import ccxt.pro as ccxt_pro
 from ccxt import TICK_SIZE
 from dateutil import parser
-from pandas import DataFrame, concat
+from pandas import DataFrame, Timestamp, concat
 
 from freqtrade.configuration import remove_exchange_credentials
 from freqtrade.constants import (
@@ -159,6 +160,7 @@ class Exchange:
         "funding_fee_timeframe": "1h",
         "ccxt_futures_name": "swap",
         "needs_trading_fees": False,  # use fetch_trading_fees to cache fees
+        "balance_includes_unrealized_pnl": False,  # ccxt "total" is plain wallet balance
         "order_props_in_contracts": ["amount", "filled", "remaining"],
         "fetch_orders_limit_minutes": None,  # "fetch_orders" is not time-limited by default
         # Override createMarketBuyOrderRequiresPrice where ccxt has it wrong
@@ -249,7 +251,7 @@ class Exchange:
 
         # Holds all open sell orders for dry_run
         self._dry_run_open_orders: dict[str, Any] = {}
-
+        self._is_demo_trading = exchange_conf.get("demo_trading", False)
         if self._config["dry_run"]:
             logger.info("Instance is running with dry_run enabled")
         logger.info(f"Using CCXT {ccxt.__version__}")
@@ -313,7 +315,7 @@ class Exchange:
     def close(self):
         if self._exchange_ws:
             self._exchange_ws.cleanup()
-        logger.debug("Exchange object destroyed, closing async loop")
+
         try:
             generic_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -365,6 +367,7 @@ class Exchange:
         self.validate_pricing(config["exit_pricing"])
         self.validate_pricing(config["entry_pricing"])
         self.validate_orderflow(config["exchange"])
+        self.validate_demo_trading(config["exchange"])
         self.validate_freqai(config)
 
         self._set_startup_candle_count(config)
@@ -418,6 +421,9 @@ class Exchange:
         except ccxt.BaseError as e:
             raise OperationalException(f"Initialization of ccxt failed. Reason: {e}") from e
 
+        if self.get_option("supports_demo_trading") and exchange_config.get("demo_trading", False):
+            api.enable_demo_trading(True)
+
         return api
 
     @property
@@ -433,12 +439,12 @@ class Exchange:
     @property
     def name(self) -> str:
         """exchange Name (from ccxt)"""
-        return self._api.name
+        return self._api.name if not self._is_demo_trading else f"{self._api.name} (Demo)"
 
     @property
     def id(self) -> str:
         """exchange ccxt id"""
-        return self._api.id
+        return self._api.id if not self._is_demo_trading else f"{self._api.id}_demo"
 
     @property
     def timeframes(self) -> list[str]:
@@ -487,7 +493,6 @@ class Exchange:
         .api will be available at this point.
         Must be overridden in child methods if required.
         """
-        pass
 
     def _log_exchange_response(self, endpoint: str, response, *, add_info=None) -> None:
         """Log exchange responses"""
@@ -694,7 +699,7 @@ class Exchange:
 
             if isinstance(markets, Exception):
                 raise markets
-            return None
+            return
         except TimeoutError as e:
             logger.warning("Could not load markets. Reason: %s", e)
             raise TemporaryError from e
@@ -711,7 +716,7 @@ class Exchange:
             and self._last_markets_refresh > 0
             and (self._last_markets_refresh + self.markets_refresh_interval > dt_ts())
         ):
-            return None
+            return
         logger.debug("Performing scheduled market reload..")
         try:
             # on initial load, we retry 3 times to ensure we get the markets
@@ -870,6 +875,16 @@ class Exchange:
                 "fetching historic OHLCV data, otherwise freqAI will not work."
             )
 
+    def validate_demo_trading(self, exchange_conf: dict) -> None:
+        """Validate demo trading configuration
+        Prevents accidental configuration with wrong expectations.
+        """
+        if exchange_conf.get("demo_trading", False):
+            if not self.get_option("supports_demo_trading"):
+                raise ConfigurationError(f"Demo trading is not supported for {self.name}.")
+            else:
+                logger.info(f"Demo trading enabled for {self.name}")
+
     def validate_required_startup_candles(self, startup_candles: int, timeframe: str) -> int:
         """
         Checks if required startup_candles is more than ohlcv_candle_limit().
@@ -971,6 +986,16 @@ class Exchange:
         Get parameter value from _ft_has
         """
         return self._ft_has.get(param, default)
+
+    def balance_includes_unrealized_pnl(self) -> bool:
+        """
+        Whether the stake currency's "total" balance as returned by get_balances() is account
+        equity (wallet balance + unrealized PnL of open positions) rather than plain wallet
+        balance. Wallets normalizes this away, so that Wallet.total has one single meaning
+        across exchanges and between dry-run and live.
+        Overridable for exchanges where this depends on more than the exchange itself.
+        """
+        return self.get_option("balance_includes_unrealized_pnl", False)
 
     def exchange_has(self, endpoint: str) -> bool:
         """
@@ -1138,7 +1163,7 @@ class Exchange:
         stop_price: float | None = None,
     ) -> CcxtOrder:
         now = dt_now()
-        order_id = f"dry_run_{side}_{pair}_{now.timestamp()}"
+        order_id = f"dry_run_{side}_{pair}_{uuid4()}"
         # Rounding here must respect to contract sizes
         _amount = self._contracts_to_amount(
             pair, self.amount_to_precision(pair, self._amount_to_contracts(pair, amount))
@@ -1455,8 +1480,13 @@ class Exchange:
                 rate_for_order,
                 params,
             )
-            if order.get("status") is None:
-                # Map empty status to open.
+            if order.get("status") is None or (
+                order.get("status") in ("closed", "expired")
+                and order.get("average") is None
+                and float(order["filled"]) != 0
+            ):
+                # Map empty status to open to force another round.
+                # Some exchanges don't provide the actual execution price for market orders.
                 order["status"] = "open"
 
             if order.get("type") is None:
@@ -2117,9 +2147,10 @@ class Exchange:
                     ticker = tickers_other.get(pair, None)
                 if ticker:
                     rate: float | None = safe_value_fallback(ticker, "last", "ask", None)
-                    if rate and pair.startswith(currency) and not pair.endswith(currency):
-                        rate = 1.0 / rate
-                    return rate
+                    if rate:
+                        if pair.startswith(currency) and not pair.endswith(currency):
+                            rate = 1.0 / rate
+                        return rate
         except ValueError:
             return None
         return None
@@ -2655,11 +2686,11 @@ class Exchange:
         if self._can_use_websocket(self._exchange_ws, pair, timeframe, candle_type):
             candle_ts = dt_ts(timeframe_to_prev_date(timeframe))
             prev_candle_ts = dt_ts(date_minus_candles(timeframe, 1))
-            candles = self._exchange_ws.ohlcvs(pair, timeframe)
-            half_candle = int(candle_ts - (candle_ts - prev_candle_ts) * 0.5)
-            last_refresh_time = int(
-                self._exchange_ws.klines_last_refresh.get((pair, timeframe, candle_type), 0)
+            candles, last_refresh_time = self._exchange_ws.get_ohlcv_with_refresh(
+                pair, timeframe, candle_type
             )
+            last_refresh_time = int(last_refresh_time)
+            half_candle = int(candle_ts - (candle_ts - prev_candle_ts) * 0.5)
 
             if (
                 candles
@@ -3065,6 +3096,10 @@ class Exchange:
     # fetch Trade data stuff
 
     def needed_candle_for_trades_ms(self, timeframe: str, candle_type: CandleType) -> int:
+        """
+        Get the timestamp in milliseconds of the earliest candle needed to fetch trades
+        for the given timeframe and candle type.
+        """
         candle_limit = self.ohlcv_candle_limit(timeframe, candle_type)
         tf_s = timeframe_to_seconds(timeframe)
         candles_fetched = candle_limit * self.required_candle_call_count
@@ -3072,11 +3107,8 @@ class Exchange:
         max_candles = self._config["orderflow"]["max_candles"]
 
         required_candles = min(max_candles, candles_fetched)
-        move_to = (
-            tf_s * candle_limit * required_candles
-            if required_candles > candle_limit
-            else (max_candles + 1) * tf_s
-        )
+        # +1 candle as a safety margin so the oldest required candle is fully covered.
+        move_to = (required_candles + 1) * tf_s
 
         now = timeframe_to_next_date(timeframe)
         return int((now - timedelta(seconds=move_to)).timestamp() * 1000)
@@ -3154,11 +3186,7 @@ class Exchange:
                             last_cached_ms = all_stored_ticks_df.iloc[-1]["timestamp"]
                             from_id = all_stored_ticks_df.iloc[-1]["id"]
                             # only use cached if it's closer than first_candle_ms
-                            since_ms = (
-                                last_cached_ms
-                                if last_cached_ms > first_candle_ms
-                                else first_candle_ms
-                            )
+                            since_ms = max(first_candle_ms, last_cached_ms)
                         else:
                             # Skip cache, it's too old
                             all_stored_ticks_df = DataFrame(
@@ -3814,6 +3842,8 @@ class Exchange:
             self._log_exchange_response("set_margin_mode", res)
         except ccxt.DDoSProtection as e:
             raise DDosProtection(e) from e
+        except ccxt.MarginModeAlreadySet as e:
+            logger.debug(f"Margin mode already set for {pair}. Message: {e}")
         except (ccxt.BadRequest, ccxt.OperationRejected) as e:
             if not accept_fail:
                 raise TemporaryError(
@@ -3948,7 +3978,14 @@ class Exchange:
         fees: float = 0
 
         if not df.empty:
-            df1 = df[(df["date"] >= open_date) & (df["date"] <= close_date)]
+            dates = df["date"]
+            unit = dates.dtype.unit
+            # Timestamps must be converted to column unit for dry/live mode
+            # where open/close dates can have microsecond precision - but the column may not have
+            # that precision.
+            lo = Timestamp(open_date).ceil(unit).as_unit(unit)
+            hi = Timestamp(close_date).floor(unit).as_unit(unit)
+            df1 = df.iloc[dates.searchsorted(lo, "left") : dates.searchsorted(hi, "right")]
             fees = sum(df1["open_fund"] * df1["open_mark"] * amount)
         if isnan(fees):
             fees = 0.0

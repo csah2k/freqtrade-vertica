@@ -275,6 +275,9 @@ Kucoin accounts may use `KCS` for fees, and if a trade happens to be on `KCS`, f
 
 ## OKX
 
+!!! Tip "Stoploss on Exchange"
+    OKX supports `stoploss_on_exchange` with both stop-limit and stop-market orders on spot and futures markets. You can use either `"limit"` or `"market"` in the `order_types.stoploss` configuration setting to select the stoploss order type.
+
 OKX requires a passphrase for each api key, you will therefore need to add this key into the configuration so your exchange section looks as follows:
 
 ```json
@@ -344,6 +347,15 @@ API Keys for live futures trading must have the following permissions:
 * Contract - Positions
 
 We do strongly recommend to limit all API keys to the IP you're going to use it from.
+
+### Bybit Demo Mode
+
+Bybit has a [demo mode](https://learn.bybit.com/en/bybit-guide/how-to-use-bybit-demo-trading) - which can be activated by setting `exchange.demo_trading` to `true` in the configuration.
+Bybit uses live markets to simulate your trades (without market impact) - making it work very similar to freqtrade's dry-run mode.  
+
+You'll need to use separate API keys for demo trading, which you can create on bybit's demo page.
+
+Demo mode is incompatible with dry-run.
 
 ## Bitmart
 
@@ -429,31 +441,50 @@ Hyperliquid handles deposits and withdrawals on the Arbitrum One chain, a Layer 
     * Create a different software wallet, only transfer the funds you want to trade with to that wallet, and use that wallet to trade on Hyperliquid.
     * If you have funds you don't want to use for trading (after making a profit for example), transfer them back to your hardware wallet.
 
-### Hyperliquid Vault / Subaccount
 
-Hyperliquid allows you to create either a vault or a subaccount.  
-To use these with Freqtrade, you will need to use the following configuration pattern:
+!!! Warning "Vaults and Subaccounts"
+    You can only use either a vault or a subaccount - not both at the same time.
+
+### Hyperliquid Subaccount
+
+Hyperliquid allows you to create subaccounts with sufficient previous trading volume.  
+To use subaccounts with Freqtrade, you will need to use the following configuration pattern:
 
 ``` json
 "exchange": {
     "name": "hyperliquid",
-    "walletAddress": "your_master_wallet_address", // Your master wallet address (not the API wallet address and not the vault/subaccount address).
+    "walletAddress": "your_master_wallet_address", // Your master wallet address (not the API wallet or vault address - but not subaccount address).
     "privateKey": "your_api_private_key", // API wallet private key (see https://app.hyperliquid.xyz/API). You'll only need the private key.
     "ccxt_config": {
         "options": {
-            "vaultAddress": "your_vault_address", // Optional, only if you want to use a vault ...
-            "subAccountAddress": "your_subaccount_address" // OR optional, only if you want to use a subaccount
+            "subAccountAddress": "your_subaccount_address" // Required if you want to use a subaccount.
         }
     },
     // ...
 }
 ```
 
-Your balance and trades will now be used from your vault / subaccount - and no longer from your main account.
+Your balance and trades will now be used from your subaccount - and no longer from your main account.
 
-!!! Note
-    You can only use either a vault or a subaccount - not both at the same time.
+### Hyperliquid Vault
 
+Hyperliquid allows you to create vaults. To use vaults with Freqtrade, you will need to use the following configuration pattern:
+
+``` json
+"exchange": {
+    "name": "hyperliquid",
+    "walletAddress": "your_vault_address", // Your vault wallet address (Must also be added below in the ccxt_config.options.vaultAddress field)
+    "privateKey": "your_api_private_key", // API wallet private key (see https://app.hyperliquid.xyz/API). You'll only need the private key.
+    "ccxt_config": {
+        "options": {
+            "vaultAddress": "your_vault_address", // Optional, only if you want to use a vault ... (vault address must also be added to walletAdress)
+        }
+    },
+    // ...
+}
+```
+
+Your balance and trades will now be used from your vault - and no longer from your main account.
 
 ### Historic Hyperliquid data
 

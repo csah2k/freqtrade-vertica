@@ -12,6 +12,13 @@ def dt_now() -> datetime:
     return datetime.now(UTC)
 
 
+def dt_now_no_micro() -> datetime:
+    """Return the current datetime in UTC without microseconds.
+    Should not be used outside of tests.
+    """
+    return dt_now().replace(microsecond=0)
+
+
 def dt_utc(
     year: int,
     month: int,
@@ -102,7 +109,7 @@ def format_date(date: datetime | None, fallback: str = "") -> str:
     return fallback
 
 
-def format_ms_time(date: int | float) -> str:
+def format_ms_time(date: float) -> str:
     """
     convert MS date to readable format.
     : epoch-string in ms
@@ -110,7 +117,7 @@ def format_ms_time(date: int | float) -> str:
     return dt_from_ts(date).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def format_ms_time_det(date: int | float) -> str:
+def format_ms_time_det(date: float) -> str:
     """
     convert MS date to readable format - detailed.
     : epoch-string in ms

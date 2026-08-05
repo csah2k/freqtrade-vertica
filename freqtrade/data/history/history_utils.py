@@ -26,9 +26,15 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import Exchange
 from freqtrade.exchange.exchange_utils import date_minus_candles
 from freqtrade.plugins.pairlist.pairlist_helpers import dynamic_expand_pairlist
-from freqtrade.util import dt_now, dt_ts, format_ms_time, format_ms_time_det
+from freqtrade.util import (
+    CustomProgress,
+    dt_now,
+    dt_ts,
+    format_ms_time,
+    format_ms_time_det,
+    retrieve_progress_tracker,
+)
 from freqtrade.util.migrations import migrate_data
-from freqtrade.util.progress_tracker import CustomProgress, retrieve_progress_tracker
 
 
 logger = logging.getLogger(__name__)
@@ -302,7 +308,7 @@ def _download_pair_history(
                 since_ms=(
                     since_ms
                     if since_ms
-                    else int((datetime.now() - timedelta(days=new_pairs_days)).timestamp()) * 1000
+                    else int((dt_now() - timedelta(days=new_pairs_days)).timestamp()) * 1000
                 ),
                 is_new_pair=data.empty,
                 candle_type=candle_type,
@@ -715,7 +721,8 @@ def download_data(
     )
     timerange = TimeRange()
     if "days" in config and config["days"] is not None:
-        time_since = (datetime.now() - timedelta(days=config["days"])).strftime("%Y%m%d")
+        # TODO: use native datetime instead of strftime to avoid timezone issues
+        time_since = (datetime.now() - timedelta(days=config["days"])).strftime("%Y%m%d")  # noqa: DTZ005
         timerange = TimeRange.parse_timerange(f"{time_since}-")
 
     if "timerange" in config:

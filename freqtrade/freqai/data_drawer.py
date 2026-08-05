@@ -24,6 +24,7 @@ from freqtrade.enums import CandleType
 from freqtrade.exceptions import OperationalException
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.strategy.interface import IStrategy
+from freqtrade.util import dt_from_ts
 
 
 logger = logging.getLogger(__name__)
@@ -192,6 +193,14 @@ class FreqaiDataDrawer:
                     self.historic_predictions = cloudpickle.load(fp)
                 logger.warning("FreqAI successfully loaded the backup historical predictions file.")
 
+            for pair_df in self.historic_predictions.values():
+                if "date_pred" in pair_df.columns and pair_df["date_pred"].dtype.kind != "M":
+                    # Predictions written by older versions can carry an object dtype
+                    # date column - convert once at load so downstream merges work.
+                    pair_df["date_pred"] = pd.to_datetime(
+                        pair_df["date_pred"], utc=True
+                    ).dt.as_unit("ms")
+
         else:
             logger.info("Could not find existing historic_predictions, starting from scratch")
 
@@ -293,7 +302,9 @@ class FreqaiDataDrawer:
         # historically made during downtime. The newest pred will get appended later in
         # append_model_predictions)
 
-        new_pred["date_pred"] = dataframe["date"]
+        # pred_df is always 0-indexed and corresponds row-for-row (positionally) to dataframe.
+        # Reset dataframe's index to match, to protect from strategies dropping rows.
+        new_pred["date_pred"] = dataframe["date"].reset_index(drop=True)
         # set everything to nan except date_pred
         columns_to_nan = new_pred.columns.difference(["date_pred", "date"])
         new_pred[columns_to_nan] = None
@@ -351,6 +362,9 @@ class FreqaiDataDrawer:
         columns = self.historic_predictions[pair].columns
 
         zeros_df = pd.DataFrame(np.zeros((1, len(columns))), index=index, columns=columns)
+        # A numeric 0 placeholder would degrade the date column to object dtype
+        # but we want to keep the date column as datetime type.
+        zeros_df["date_pred"] = pd.Series(pd.NaT, index=index, dtype="datetime64[ms, UTC]")
         self.historic_predictions[pair] = pd.concat(
             [self.historic_predictions[pair], zeros_df], ignore_index=True, axis=0
         )
@@ -361,7 +375,7 @@ class FreqaiDataDrawer:
             label_loc = df.columns.get_loc(label)
             pred_label_loc = predictions.columns.get_loc(label)
             df.iloc[-1, label_loc] = predictions.iloc[-1, pred_label_loc]
-            if df[label].dtype == object:
+            if pd.api.types.is_string_dtype(df[label].dtype):
                 continue
             label_mean_loc = df.columns.get_loc(f"{label}_mean")
             label_std_loc = df.columns.get_loc(f"{label}_std")
@@ -403,12 +417,27 @@ class FreqaiDataDrawer:
         """
         Attach the return values to the strat dataframe
         :param dataframe: DataFrame = strategy dataframe
-        :return: DataFrame = strat dataframe with return values attached
+        :return: DataFrame = strategy dataframe with return values attached
         """
         df = self.model_return_values[pair]
         to_keep = [col for col in dataframe.columns if not col.startswith("&")]
-        dataframe = pd.concat([dataframe[to_keep], df], axis=1)
-        return dataframe
+        if df["date_pred"].dtype.kind != "M":
+            # Fallback - object dtype dates are normally converted when restoring from
+            # disk, but pandas refuses to merge on them, so guard here as well.
+            df["date_pred"] = pd.to_datetime(df["date_pred"], utc=True).dt.as_unit("ms")
+        # Merge on the candle date (not on the index) to ensure alignment in case of bad
+        # strategy handling like dropping candles or reindexing.
+        dataframe_new = pd.merge(
+            dataframe[to_keep], df, how="left", left_on="date", right_on="date_pred", validate="m:1"
+        )
+        unmatched = int(dataframe_new["date_pred"].isna().sum())
+        if unmatched:
+            logger.warning(
+                f"{unmatched} candle(s) could not be matched to historic predictions for "
+                f"{pair} - their return values are set to NaN. This can happen after "
+                "extended downtime, or if the strategy modified the dates of the dataframe."
+            )
+        return dataframe_new
 
     def return_null_values_to_strategy(self, dataframe: DataFrame, dk: FreqaiDataKitchen) -> None:
         """
@@ -472,7 +501,7 @@ class FreqaiDataDrawer:
                 )
                 num_delete = len(sorted_dict) - num_keep
                 deleted = 0
-                for k, v in sorted_dict.items():
+                for v in sorted_dict.values():
                     if deleted >= num_delete:
                         break
                     logger.info(f"Freqai purging old model file {v}")
@@ -498,8 +527,6 @@ class FreqaiDataDrawer:
 
         with (save_path / f"{dk.model_filename}_{METADATA}.json").open("w") as fp:
             rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=METADATA_NUMBER_MODE)
-
-        return
 
     def save_data(self, model: Any, coin: str, dk: FreqaiDataKitchen) -> None:
         """
@@ -556,8 +583,6 @@ class FreqaiDataDrawer:
         self.meta_data_dictionary[coin][FEATURE_PIPELINE] = dk.feature_pipeline
         self.meta_data_dictionary[coin][LABEL_PIPELINE] = dk.label_pipeline
         self.save_drawer_to_disk()
-
-        return
 
     def load_metadata(self, dk: FreqaiDataKitchen) -> None:
         """
@@ -759,7 +784,7 @@ class FreqaiDataDrawer:
             all_pairs_end_dates.append(pair_historic_data.date_pred.max())
 
         global_metadata = self.load_global_metadata_from_disk()
-        start_date = datetime.fromtimestamp(int(global_metadata["start_dry_live_date"]))
+        start_date = dt_from_ts(int(global_metadata["start_dry_live_date"]))
         end_date = max(all_pairs_end_dates)
         # add 1 day to string timerange to ensure BT module will load all dataframe data
         end_date = end_date + timedelta(days=1)

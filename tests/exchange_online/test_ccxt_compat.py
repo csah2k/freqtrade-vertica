@@ -158,14 +158,12 @@ class TestCCXTExchange:
                 assert currency in balances
                 assert isinstance(balance, dict)
                 assert balance == balances[currency]
-            pass
         else:
             pytest.skip(f"No sample Balances available for exchange {exchangename}")
 
     def test_ccxt_fetch_tickers(self, exchange: EXCHANGE_FIXTURE_TYPE):
         exch, _, exchange_params = exchange
         pair = exchange_params["pair"]
-
         tickers = exch.get_tickers()
         assert pair in tickers
         assert "ask" in tickers[pair]
@@ -287,7 +285,7 @@ class TestCCXTExchange:
         # Check if last-timeframe is within the last 2 intervals
         now = datetime.now(UTC) - timedelta(minutes=(timeframe_to_minutes(timeframe) * 2))
         assert exch.klines(pair_tf).iloc[-1]["date"] >= timeframe_to_prev_date(timeframe, now)
-        assert exch.klines(pair_tf)["date"].astype(int).iloc[0] // 1e6 == since_ms
+        assert exch.klines(pair_tf)["date"].dt.as_unit("ms").astype("int64").iloc[0] == since_ms
 
     def _ccxt__async_get_candle_history(
         self, exchange, pair: str, timeframe: str, candle_type: CandleType, factor: float = 0.9
@@ -295,7 +293,12 @@ class TestCCXTExchange:
         timeframe_ms = timeframe_to_msecs(timeframe)
         timeframe_ms_8h = timeframe_to_msecs("8h")
         now = timeframe_to_prev_date(timeframe, datetime.now(UTC))
-        for offset_days in (360, 120, 30, 10, 5, 2):
+        offset_attempts = (360, 120, 30, 10, 5, 2)
+        if candle_type == CandleType.FUNDING_RATE and exchange.id == "gate":
+            # gate only provides 180 days of funding fee history
+            offset_attempts = (179, 120, 30, 10, 5)
+
+        for offset_days in offset_attempts:
             since = now - timedelta(days=offset_days)
             since_ms = int(since.timestamp() * 1000)
 
